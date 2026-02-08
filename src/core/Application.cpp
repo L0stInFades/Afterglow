@@ -1,0 +1,779 @@
+#include "core/Application.hpp"
+
+#include <ShellScalingApi.h>
+#include <shlwapi.h>
+#include <commdlg.h>
+#include <dwmapi.h>
+#include <stdexcept>
+#include <algorithm>
+#include <d2d1helper.h>
+#include <windowsx.h>
+#include <shlobj.h>
+#include <knownfolders.h>
+#include <fstream>
+#include <sstream>
+
+#pragma comment(lib, "shcore.lib")
+#pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "dwmapi.lib")
+
+// Debug log to file next to exe
+namespace {
+void DebugLog(const char* msg) {
+    static FILE* f = nullptr;
+    if (!f) {
+        f = fopen("debug_log.txt", "w");
+    }
+    if (f) {
+        fprintf(f, "%s\n", msg);
+        fflush(f);
+    }
+    OutputDebugStringA(msg);
+    OutputDebugStringA("\n");
+}
+void DebugLogHR(const char* msg, HRESULT hr) {
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s (HRESULT=0x%08lX)", msg, static_cast<unsigned long>(hr));
+    DebugLog(buf);
+}
+} // namespace
+
+namespace UltraImageViewer {
+namespace Core {
+
+Application* Application::s_instance = nullptr;
+
+Application::Application()
+{
+    if (s_instance != nullptr) {
+        throw std::runtime_error("Application already exists");
+    }
+    s_instance = this;
+}
+
+Application::~Application()
+{
+    Shutdown();
+    s_instance = nullptr;
+}
+
+bool Application::Initialize(HINSTANCE hInstance)
+{
+    hInstance_ = hInstance;
+    DebugLog("=== UltraImageViewer starting ===");
+
+    if (!InitializeWindow()) {
+        DebugLog("FAIL: InitializeWindow");
+        return false;
+    }
+    DebugLog("OK: InitializeWindow");
+
+    if (!InitializeComponents()) {
+        DebugLog("FAIL: InitializeComponents");
+        return false;
+    }
+    DebugLog("OK: InitializeComponents");
+
+    isInitialized_ = true;
+    DebugLog("OK: Initialization complete");
+    return true;
+}
+
+void Application::Shutdown()
+{
+    if (!isInitialized_) {
+        return;
+    }
+    SaveRecents();
+
+    // Cancel any ongoing scan
+    scanCancelled_ = true;
+    if (scanThread_.joinable()) {
+        scanThread_.request_stop();
+        scanThread_.join();
+    }
+
+    // Shutdown order matters
+    if (pipeline_) pipeline_->Shutdown();
+    viewManager_.reset();
+    animEngine_.reset();
+    pipeline_.reset();
+    renderer_.reset();
+    cache_.reset();
+    decoder_.reset();
+
+    if (hwnd_) {
+        DestroyWindow(hwnd_);
+        hwnd_ = nullptr;
+    }
+
+    isInitialized_ = false;
+}
+
+int Application::Run(int nCmdShow)
+{
+    if (!isInitialized_) {
+        return 1;
+    }
+    if (!hwnd_ || !IsWindow(hwnd_)) {
+        MessageBoxW(nullptr, L"Main window handle is invalid.", L"UltraImageViewer", MB_ICONERROR | MB_OK);
+        return 1;
+    }
+    if (nCmdShow == SW_HIDE) {
+        nCmdShow = SW_SHOWNORMAL;
+    }
+    DebugLog("Run: ShowWindow");
+    ShowWindow(hwnd_, nCmdShow);
+    UpdateWindow(hwnd_);
+
+    // Auto-scan system images if no images loaded via command line
+    if (currentImages_.empty()) {
+        StartSystemScan();
+    }
+
+    QueryPerformanceFrequency(&perfFrequency_);
+    QueryPerformanceCounter(&lastFrameTime_);
+
+    DebugLog("Run: entering game loop");
+    // Game-loop style message loop
+    MSG msg = {};
+    bool running = true;
+    while (running) {
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+                running = false;
+                break;
+            }
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+        if (!running) break;
+
+        // Calculate delta time
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        float dt = static_cast<float>(now.QuadPart - lastFrameTime_.QuadPart) /
+                   static_cast<float>(perfFrequency_.QuadPart);
+        lastFrameTime_ = now;
+        dt = std::min(dt, 0.05f);  // Cap at 50ms to prevent large jumps
+
+        // Update
+        if (animEngine_) animEngine_->Update(dt);
+        if (viewManager_) viewManager_->Update(dt);
+
+        // Check scan progress and push results to gallery
+        CheckScanProgress();
+
+        // Render only when needed
+        bool hasAnimations = animEngine_ && animEngine_->HasActiveAnimations();
+        bool viewNeedsRender = viewManager_ && viewManager_->NeedsRender();
+
+        if (needsRender_ || hasAnimations || viewNeedsRender || isScanning_) {
+            try {
+                Render();
+            } catch (const std::exception& e) {
+                DebugLog(("Render exception: " + std::string(e.what())).c_str());
+            } catch (...) {
+                DebugLog("Render unknown exception");
+            }
+            needsRender_ = false;
+        } else {
+            Sleep(1);  // Yield CPU when idle
+        }
+    }
+
+    return static_cast<int>(msg.wParam);
+}
+
+void Application::StartSystemScan()
+{
+    DebugLog("Starting system image scan...");
+    isScanning_ = true;
+    scanCancelled_ = false;
+    scanProgress_ = 0;
+    scanDirty_ = false;
+    lastGalleryUpdateCount_ = 0;
+
+    // Update gallery scanning state
+    if (viewManager_) {
+        viewManager_->GetGalleryView()->SetScanningState(true, 0);
+    }
+
+    scanThread_ = std::jthread([this](std::stop_token) {
+        // COM must be initialized on this thread for SHGetKnownFolderPath
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
+        try {
+            auto results = ImagePipeline::ScanSystemImages(scanCancelled_, scanProgress_);
+
+            DebugLog(("Scan found " + std::to_string(results.size()) + " images").c_str());
+
+            {
+                std::lock_guard lock(scanMutex_);
+                scannedResults_ = std::move(results);
+            }
+            scanDirty_ = true;
+        } catch (const std::exception& e) {
+            DebugLog(("Scan exception: " + std::string(e.what())).c_str());
+        } catch (...) {
+            DebugLog("Scan unknown exception");
+        }
+
+        isScanning_ = false;
+        CoUninitialize();
+    });
+}
+
+void Application::CheckScanProgress()
+{
+    if (!viewManager_) return;
+
+    auto* gallery = viewManager_->GetGalleryView();
+
+    // Update scanning state display (progress count)
+    if (isScanning_) {
+        size_t count = scanProgress_.load();
+        gallery->SetScanningState(true, count);
+        needsRender_ = true;
+    }
+
+    // Check if scan has delivered new results
+    if (scanDirty_.exchange(false)) {
+        std::vector<ScannedImage> results;
+        {
+            std::lock_guard lock(scanMutex_);
+            results = scannedResults_;
+        }
+
+        gallery->SetScanningState(false, results.size());
+        gallery->SetImagesGrouped(results);
+
+        // Update flat image list for viewer compatibility
+        currentImages_.clear();
+        for (const auto& img : results) {
+            currentImages_.push_back(img.path);
+        }
+
+        lastGalleryUpdateCount_ = results.size();
+
+        std::wstring title = windowTitle_ + L" - " +
+            std::to_wstring(results.size()) + L" photos";
+        SetWindowTextW(hwnd_, title.c_str());
+
+        needsRender_ = true;
+        DebugLog("Scan results pushed to gallery");
+    }
+}
+
+bool Application::InitializeWindow()
+{
+    WNDCLASSEXW wcex = {};
+    wcex.cbSize = sizeof(WNDCLASSEXW);
+    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.lpfnWndProc = WindowProc;
+    wcex.hInstance = hInstance_;
+    wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wcex.hbrBackground = nullptr;  // No GDI background - D2D handles everything
+    wcex.lpszClassName = L"UltraImageViewerWindowClass";
+
+    if (!RegisterClassExW(&wcex)) {
+        return false;
+    }
+
+    RECT rc = { 0, 0, static_cast<LONG>(windowWidth_), static_cast<LONG>(windowHeight_) };
+    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+
+    hwnd_ = CreateWindowExW(
+        WS_EX_NOREDIRECTIONBITMAP,  // Required for DirectComposition
+        L"UltraImageViewerWindowClass",
+        windowTitle_.c_str(),
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        rc.right - rc.left,
+        rc.bottom - rc.top,
+        nullptr,
+        nullptr,
+        hInstance_,
+        this
+    );
+
+    if (!hwnd_) {
+        return false;
+    }
+
+    // Enable drag and drop
+    DragAcceptFiles(hwnd_, TRUE);
+
+    // Dark title bar
+    SetDarkTitleBar();
+
+    return true;
+}
+
+void Application::SetDarkTitleBar()
+{
+    BOOL useDarkMode = TRUE;
+    // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+    DwmSetWindowAttribute(hwnd_, 20, &useDarkMode, sizeof(useDarkMode));
+}
+
+bool Application::InitializeComponents()
+{
+    if (!InitializeDecoder()) {
+        MessageBoxW(hwnd_, L"Failed to initialize image decoder.", L"UltraImageViewer", MB_ICONERROR);
+        return false;
+    }
+
+    if (!InitializeCache()) {
+        MessageBoxW(hwnd_, L"Failed to initialize cache.", L"UltraImageViewer", MB_ICONERROR);
+        return false;
+    }
+
+    if (!InitializeRenderer()) {
+        MessageBoxW(hwnd_, L"Failed to initialize Direct2D renderer.", L"UltraImageViewer", MB_ICONERROR);
+        return false;
+    }
+
+    // Sync DPI scale from renderer (physical pixels → DIPs conversion factor)
+    dpiScale_ = renderer_->GetDpiX() / 96.0f;
+
+    // Create animation engine
+    animEngine_ = std::make_unique<Animation::AnimationEngine>();
+
+    // Create image pipeline
+    pipeline_ = std::make_unique<ImagePipeline>();
+    pipeline_->Initialize(decoder_.get(), cache_.get(), renderer_.get());
+
+    // Create view manager
+    viewManager_ = std::make_unique<UI::ViewManager>();
+    viewManager_->Initialize(renderer_.get(), animEngine_.get(), pipeline_.get());
+    viewManager_->SetViewSize(static_cast<float>(windowWidth_) / dpiScale_,
+                               static_cast<float>(windowHeight_) / dpiScale_);
+
+    LoadRecents();
+
+    return true;
+}
+
+bool Application::InitializeDecoder()
+{
+    decoder_ = std::make_unique<ImageDecoder>();
+    return true;
+}
+
+bool Application::InitializeCache()
+{
+    cache_ = std::make_unique<CacheManager>(512 * 1024 * 1024);
+    return true;
+}
+
+bool Application::InitializeRenderer()
+{
+    DebugLog("  Creating Direct2DRenderer...");
+    renderer_ = std::make_unique<Rendering::Direct2DRenderer>();
+    if (!renderer_->Initialize(hwnd_)) {
+        DebugLog("  FAIL: renderer->Initialize()");
+        return false;
+    }
+    DebugLog("  OK: renderer->Initialize()");
+    return true;
+}
+
+void Application::Render()
+{
+    if (!renderer_ || !viewManager_) return;
+
+    // Sync view size with actual client area every frame to prevent mismatch
+    RECT rc;
+    if (GetClientRect(hwnd_, &rc)) {
+        UINT cw = rc.right - rc.left;
+        UINT ch = rc.bottom - rc.top;
+        if (cw > 0 && ch > 0) {
+            if (cw != windowWidth_ || ch != windowHeight_) {
+                windowWidth_ = cw;
+                windowHeight_ = ch;
+                renderer_->Resize(cw, ch);
+                viewManager_->SetViewSize(static_cast<float>(cw) / dpiScale_,
+                                           static_cast<float>(ch) / dpiScale_);
+            }
+        }
+    }
+
+    renderer_->BeginDraw();
+    viewManager_->Render(renderer_.get());
+    renderer_->EndDraw();
+}
+
+LRESULT CALLBACK Application::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    Application* app = nullptr;
+
+    if (msg == WM_CREATE) {
+        LPCREATESTRUCTW pCreate = reinterpret_cast<LPCREATESTRUCTW>(lParam);
+        app = reinterpret_cast<Application*>(pCreate->lpCreateParams);
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
+        if (app) {
+            app->hwnd_ = hwnd;
+        }
+        return 0;
+    } else {
+        app = reinterpret_cast<Application*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+    }
+
+    if (app) {
+        return app->HandleMessage(msg, wParam, lParam);
+    }
+
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+LRESULT Application::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+        case WM_PAINT:
+            OnPaint();
+            return 0;
+
+        case WM_SIZE:
+            OnSize(LOWORD(lParam), HIWORD(lParam));
+            return 0;
+
+        case WM_KEYDOWN:
+            OnKeyDown(static_cast<UINT>(wParam));
+            return 0;
+
+        case WM_MOUSEWHEEL: {
+            POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ScreenToClient(hwnd_, &pt);
+            OnMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam), pt.x, pt.y);
+            return 0;
+        }
+
+        case WM_LBUTTONDOWN:
+            OnMouseDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            return 0;
+
+        case WM_MOUSEMOVE:
+            OnMouseMove(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            return 0;
+
+        case WM_LBUTTONUP:
+            OnMouseUp(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            return 0;
+
+        case WM_DROPFILES:
+            OnDropFiles(reinterpret_cast<HDROP>(wParam));
+            return 0;
+
+        case WM_DPICHANGED:
+            UpdateDpi();
+            return 0;
+
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
+
+        case WM_ERASEBKGND:
+            return 1;
+
+        default:
+            return DefWindowProc(hwnd_, msg, wParam, lParam);
+    }
+}
+
+void Application::OnPaint()
+{
+    // Rendering is driven by the game loop, not WM_PAINT.
+    // Just validate the rect to prevent continuous WM_PAINT messages.
+    ValidateRect(hwnd_, nullptr);
+    needsRender_ = true;
+}
+
+void Application::OnSize(UINT width, UINT height)
+{
+    if (width == 0 || height == 0) return;
+
+    windowWidth_ = width;
+    windowHeight_ = height;
+
+    if (renderer_) {
+        renderer_->Resize(width, height);
+    }
+    if (viewManager_) {
+        viewManager_->SetViewSize(static_cast<float>(width) / dpiScale_,
+                                   static_cast<float>(height) / dpiScale_);
+    }
+    needsRender_ = true;
+}
+
+void Application::OnKeyDown(UINT key)
+{
+    // Ctrl+O: open file dialog (manual override)
+    if ((GetKeyState(VK_CONTROL) & 0x8000) && (key == 'O')) {
+        // Cancel any ongoing scan
+        if (isScanning_) {
+            scanCancelled_ = true;
+            if (scanThread_.joinable()) {
+                scanThread_.request_stop();
+                scanThread_.join();
+            }
+            isScanning_ = false;
+            if (viewManager_) {
+                viewManager_->GetGalleryView()->SetScanningState(false, 0);
+            }
+        }
+
+        auto paths = ShowOpenDialog();
+        if (!paths.empty()) {
+            OpenImages(paths);
+        }
+        return;
+    }
+
+    if (viewManager_) {
+        viewManager_->OnKeyDown(key);
+    }
+    needsRender_ = true;
+}
+
+void Application::OnMouseWheel(short delta, int x, int y)
+{
+    if (viewManager_) {
+        viewManager_->OnMouseWheel(static_cast<float>(delta),
+                                    static_cast<float>(x) / dpiScale_,
+                                    static_cast<float>(y) / dpiScale_);
+    }
+    needsRender_ = true;
+}
+
+void Application::OnDropFiles(HDROP hDrop)
+{
+    UINT fileCount = DragQueryFile(hDrop, 0xFFFFFFFF, nullptr, 0);
+
+    std::vector<std::filesystem::path> droppedFiles;
+    for (UINT i = 0; i < fileCount; ++i) {
+        WCHAR fileName[MAX_PATH];
+        if (DragQueryFile(hDrop, i, fileName, MAX_PATH) > 0) {
+            std::filesystem::path path(fileName);
+            if (ImageDecoder::IsSupportedFormat(path)) {
+                droppedFiles.push_back(path);
+            }
+        }
+    }
+    DragFinish(hDrop);
+
+    if (!droppedFiles.empty()) {
+        // Cancel any ongoing scan
+        if (isScanning_) {
+            scanCancelled_ = true;
+            if (scanThread_.joinable()) {
+                scanThread_.request_stop();
+                scanThread_.join();
+            }
+            isScanning_ = false;
+        }
+        OpenImages(droppedFiles);
+    }
+}
+
+void Application::OnMouseDown(int x, int y)
+{
+    SetCapture(hwnd_);
+    if (viewManager_) {
+        viewManager_->OnMouseDown(static_cast<float>(x) / dpiScale_,
+                                   static_cast<float>(y) / dpiScale_);
+    }
+    needsRender_ = true;
+}
+
+void Application::OnMouseMove(int x, int y)
+{
+    if (viewManager_) {
+        viewManager_->OnMouseMove(static_cast<float>(x) / dpiScale_,
+                                   static_cast<float>(y) / dpiScale_);
+    }
+}
+
+void Application::OnMouseUp(int x, int y)
+{
+    ReleaseCapture();
+    if (viewManager_) {
+        viewManager_->OnMouseUp(static_cast<float>(x) / dpiScale_,
+                                 static_cast<float>(y) / dpiScale_);
+    }
+    needsRender_ = true;
+}
+
+void Application::OpenImages(const std::vector<std::filesystem::path>& paths)
+{
+    if (paths.empty()) return;
+
+    // Cancel any ongoing scan
+    if (isScanning_) {
+        scanCancelled_ = true;
+        if (scanThread_.joinable()) {
+            scanThread_.request_stop();
+            scanThread_.join();
+        }
+        isScanning_ = false;
+        if (viewManager_) {
+            viewManager_->GetGalleryView()->SetScanningState(false, 0);
+        }
+    }
+
+    // Take the first file, scan its directory for all images
+    const auto& firstPath = paths[0];
+    auto dir = firstPath.parent_path();
+
+    currentImages_ = ImagePipeline::ScanDirectory(dir);
+
+    if (currentImages_.empty()) {
+        // If directory scan failed, just use the provided paths
+        currentImages_ = paths;
+    }
+
+    // Add to recent
+    for (const auto& p : paths) {
+        AddRecent(p);
+    }
+
+    // Set gallery view images
+    if (viewManager_) {
+        viewManager_->GetGalleryView()->SetImages(currentImages_);
+
+        // Find the index of the first opened file
+        size_t startIndex = 0;
+        for (size_t i = 0; i < currentImages_.size(); ++i) {
+            if (currentImages_[i] == firstPath) {
+                startIndex = i;
+                break;
+            }
+        }
+
+        // If only opening a single file, go directly to viewer
+        if (paths.size() == 1) {
+            auto cellRect = viewManager_->GetGalleryView()->GetCellScreenRect(startIndex);
+            D2D1_RECT_F fromRect = cellRect.value_or(D2D1::RectF(
+                static_cast<float>(windowWidth_) * 0.5f - 50.0f,
+                static_cast<float>(windowHeight_) * 0.5f - 50.0f,
+                static_cast<float>(windowWidth_) * 0.5f + 50.0f,
+                static_cast<float>(windowHeight_) * 0.5f + 50.0f));
+            viewManager_->TransitionToViewer(startIndex, fromRect);
+        }
+    }
+
+    std::wstring title = windowTitle_ + L" - " + dir.filename().wstring();
+    SetWindowTextW(hwnd_, title.c_str());
+
+    needsRender_ = true;
+}
+
+std::vector<std::filesystem::path> Application::ShowOpenDialog()
+{
+    std::vector<std::filesystem::path> result;
+    std::vector<wchar_t> buffer(64 * 1024);
+    buffer[0] = L'\0';
+
+    const wchar_t filter[] =
+        L"Image Files (*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.tif;*.tiff;*.webp;*.ico;*.jxr)\0"
+        L"*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.tif;*.tiff;*.webp;*.ico;*.jxr\0"
+        L"All Files (*.*)\0*.*\0";
+
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd_;
+    ofn.lpstrFile = buffer.data();
+    ofn.nMaxFile = static_cast<DWORD>(buffer.size());
+    ofn.lpstrFilter = filter;
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;
+
+    if (!GetOpenFileNameW(&ofn)) {
+        return result;
+    }
+
+    std::wstring first = buffer.data();
+    size_t offset = first.size() + 1;
+    if (buffer[offset] == L'\0') {
+        result.emplace_back(first);
+        return result;
+    }
+
+    std::filesystem::path dir(first);
+    while (buffer[offset] != L'\0') {
+        std::wstring file = &buffer[offset];
+        result.emplace_back(dir / file);
+        offset += file.size() + 1;
+    }
+
+    return result;
+}
+
+void Application::UpdateDpi()
+{
+    HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+    UINT dpiX, dpiY;
+    if (SUCCEEDED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY))) {
+        dpiScale_ = static_cast<float>(dpiX) / 96.0f;
+        if (renderer_) {
+            renderer_->SetDpi(static_cast<float>(dpiX), static_cast<float>(dpiY));
+        }
+    }
+    needsRender_ = true;
+}
+
+void Application::LoadRecents()
+{
+    recentItems_.clear();
+    recentFilePath_ = GetRecentFilePath();
+    if (recentFilePath_.empty()) return;
+
+    std::wifstream in(recentFilePath_);
+    if (!in.is_open()) return;
+
+    std::wstring line;
+    while (std::getline(in, line)) {
+        if (!line.empty()) {
+            recentItems_.push_back(line);
+        }
+        if (recentItems_.size() >= kMaxRecentItems) break;
+    }
+}
+
+void Application::SaveRecents()
+{
+    if (recentFilePath_.empty()) return;
+    std::filesystem::create_directories(recentFilePath_.parent_path());
+    std::wofstream out(recentFilePath_, std::ios::trunc);
+    for (size_t i = 0; i < recentItems_.size() && i < kMaxRecentItems; ++i) {
+        out << recentItems_[i].wstring() << L"\n";
+    }
+}
+
+void Application::AddRecent(const std::filesystem::path& path)
+{
+    auto it = std::find(recentItems_.begin(), recentItems_.end(), path);
+    if (it != recentItems_.end()) {
+        recentItems_.erase(it);
+    }
+    recentItems_.insert(recentItems_.begin(), path);
+    if (recentItems_.size() > kMaxRecentItems) {
+        recentItems_.resize(kMaxRecentItems);
+    }
+    SaveRecents();
+}
+
+std::filesystem::path Application::GetRecentFilePath() const
+{
+    PWSTR outPath = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &outPath))) {
+        return {};
+    }
+    std::filesystem::path base(outPath);
+    CoTaskMemFree(outPath);
+    return base / L"UltraImageViewer" / L"recent.txt";
+}
+
+} // namespace Core
+} // namespace UltraImageViewer

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "ultraimageviewer",
+  "version-string": "1.0.0",
+  "description": "Ultra-advanced Windows image viewer with hardware acceleration",
+  "dependencies": [
+    {
+      "name": "directx-tex",
+      "platform": "windows"
+    },
+    {
+      "name": "directx-headers",
+      "platform": "windows"
+    },
+    {
+      "name": "wil",
+      "platform": "windows"
+    },
+    "stb",
+    "libraw",
+    "nlohmann-json",
+    "spdlog",
+    "fmt",
+    {
+      "name": "gtest",
+      "platform": "windows"
+    }
+  ],
+  "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"
+}

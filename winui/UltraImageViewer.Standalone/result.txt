@@ -1,0 +1,63 @@
+用于 x64 的 Microsoft (R) C/C++ 优化编译器 19.50.35721 版
+版权所有(C) Microsoft Corporation。保留所有权利。
+
+UltraImageViewer.cpp
+UltraImageViewer.cpp(37): error C2664: “HRESULT SHGetFolderPathA(HWND,int,HANDLE,DWORD,LPSTR)”: 无法将参数 5 从“wchar_t [260]”转换为“LPSTR”
+UltraImageViewer.cpp(37): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+C:\Program Files (x86)\Windows Kits\10\\include\10.0.26100.0\\um\shlobj_core.h(915): note: 参见“SHGetFolderPathA”的声明
+UltraImageViewer.cpp(37): note: 尝试匹配参数列表“(int, int, int, int, wchar_t [260])”时
+UltraImageViewer.cpp(57): error C2664: “BOOL PathFileExistsA(LPCSTR)”: 无法将参数 1 从“wchar_t [520]”转换为“LPCSTR”
+UltraImageViewer.cpp(57): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+C:\Program Files (x86)\Windows Kits\10\\include\10.0.26100.0\\um\shlwapi.h(560): note: 参见“PathFileExistsA”的声明
+UltraImageViewer.cpp(57): note: 尝试匹配参数列表“(wchar_t [520])”时
+UltraImageViewer.cpp(135): error C2440: “=”: 无法从“wchar_t [260]”转换为“LPSTR”
+UltraImageViewer.cpp(135): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+UltraImageViewer.cpp(137): error C2440: “=”: 无法从“const wchar_t [72]”转换为“LPCSTR”
+UltraImageViewer.cpp(137): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+UltraImageViewer.cpp(155): error C2664: “BOOL PathAppendA(LPSTR,LPCSTR)”: 无法将参数 1 从“wchar_t [260]”转换为“LPSTR”
+UltraImageViewer.cpp(155): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+C:\Program Files (x86)\Windows Kits\10\\include\10.0.26100.0\\um\shlwapi.h(536): note: 参见“PathAppendA”的声明
+UltraImageViewer.cpp(155): note: 尝试匹配参数列表“(wchar_t [260], wchar_t *)”时
+UltraImageViewer.cpp(181): error C2660: “wcscpy_s”: 函数不接受 2 个参数
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\corecrt_wstring.h(39): note: 参见“wcscpy_s”的声明
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\corecrt_wstring.h(113): note: 可能是“errno_t wcscpy_s(wchar_t (&)[_Size],const wchar_t *) throw()”
+UltraImageViewer.cpp(181): note: “errno_t wcscpy_s(wchar_t (&)[_Size],const wchar_t *) throw()”: 无法从“CHAR [32]”推导出“wchar_t (&)[_Size]”的 模板 参数
+UltraImageViewer.cpp(181): note: 尝试匹配参数列表“(CHAR [32], const wchar_t [6])”时
+UltraImageViewer.cpp(187): error C2664: “int DrawTextA(HDC,LPCSTR,int,LPRECT,UINT)”: 无法将参数 2 从“const wchar_t [17]”转换为“LPCSTR”
+UltraImageViewer.cpp(187): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+C:\Program Files (x86)\Windows Kits\10\\include\10.0.26100.0\\um\winuser.h(8248): note: 参见“DrawTextA”的声明
+UltraImageViewer.cpp(187): note: 尝试匹配参数列表“(HDC, const wchar_t [17], int, RECT *, int)”时
+UltraImageViewer.cpp(199): error C2664: “int DrawTextA(HDC,LPCSTR,int,LPRECT,UINT)”: 无法将参数 2 从“const wchar_t [30]”转换为“LPCSTR”
+UltraImageViewer.cpp(199): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+C:\Program Files (x86)\Windows Kits\10\\include\10.0.26100.0\\um\winuser.h(8248): note: 参见“DrawTextA”的声明
+UltraImageViewer.cpp(199): note: 尝试匹配参数列表“(HDC, const wchar_t [30], int, RECT *, int)”时
+UltraImageViewer.cpp(204): error C2664: “int DrawTextA(HDC,LPCSTR,int,LPRECT,UINT)”: 无法将参数 2 从“const wchar_t [14]”转换为“LPCSTR”
+UltraImageViewer.cpp(204): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+C:\Program Files (x86)\Windows Kits\10\\include\10.0.26100.0\\um\winuser.h(8248): note: 参见“DrawTextA”的声明
+UltraImageViewer.cpp(204): note: 尝试匹配参数列表“(HDC, const wchar_t [14], int, RECT *, int)”时
+UltraImageViewer.cpp(215): error C2664: “int DrawTextA(HDC,LPCSTR,int,LPRECT,UINT)”: 无法将参数 2 从“const _Elem *”转换为“LPCSTR”
+        with
+        [
+            _Elem=wchar_t
+        ]
+UltraImageViewer.cpp(215): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+C:\Program Files (x86)\Windows Kits\10\\include\10.0.26100.0\\um\winuser.h(8248): note: 参见“DrawTextA”的声明
+UltraImageViewer.cpp(215): note: 尝试匹配参数列表“(HDC, const _Elem *, int, RECT *, int)”时
+        with
+        [
+            _Elem=wchar_t
+        ]
+UltraImageViewer.cpp(336): error C2664: “UINT DragQueryFileA(HDROP,UINT,LPSTR,UINT)”: 无法将参数 3 从“wchar_t [260]”转换为“LPSTR”
+UltraImageViewer.cpp(336): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+C:\Program Files (x86)\Windows Kits\10\\include\10.0.26100.0\\um\shellapi.h(82): note: 参见“DragQueryFileA”的声明
+UltraImageViewer.cpp(336): note: 尝试匹配参数列表“(HDROP, int, wchar_t [260], int)”时
+UltraImageViewer.cpp(352): error C2664: “void Gdiplus::GdiplusShutdown(ULONG_PTR)”: 无法将参数 1 从“void (__cdecl *)(ULONG_PTR)”转换为“ULONG_PTR”
+UltraImageViewer.cpp(352): note: 没有使该转换得以执行的上下文
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\um\GdiplusInit.h(158): note: 参见“Gdiplus::GdiplusShutdown”的声明
+UltraImageViewer.cpp(352): note: 尝试匹配参数列表“(overloaded-function)”时
+UltraImageViewer.cpp(374): error C2440: “=”: 无法从“const wchar_t [22]”转换为“LPCSTR”
+UltraImageViewer.cpp(374): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+UltraImageViewer.cpp(379): error C2664: “HWND CreateWindowExA(DWORD,LPCSTR,LPCSTR,DWORD,int,int,int,int,HWND,HMENU,HINSTANCE,LPVOID)”: 无法将参数 2 从“const wchar_t [22]”转换为“LPCSTR”
+UltraImageViewer.cpp(379): note: 指向的类型不相关; 转换需要 reinterpret_cast、C 样式强制转换或带圆括号的函数样式强制转换
+C:\Program Files (x86)\Windows Kits\10\\include\10.0.26100.0\\um\winuser.h(4426): note: 参见“CreateWindowExA”的声明
+UltraImageViewer.cpp(379): note: 尝试匹配参数列表“(long, const wchar_t [22], const wchar_t [17], long, int, int, int, int, int, int, HINSTANCE, int)”时

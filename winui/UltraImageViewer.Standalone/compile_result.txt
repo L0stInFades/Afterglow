@@ -1,0 +1,17 @@
+用于 x64 的 Microsoft (R) C/C++ 优化编译器 19.50.35721 版
+版权所有(C) Microsoft Corporation。保留所有权利。
+
+UltraImageViewer.cpp
+Microsoft (R) Incremental Linker Version 14.50.35721.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+/out:UltraImageViewer.exe 
+/SUBSYSTEM:WINDOWS 
+UltraImageViewer.obj 
+user32.lib 
+gdi32.lib 
+gdiplus.lib 
+shlwapi.lib 
+shell32.lib 
+ole32.lib 
+comdlg32.lib 

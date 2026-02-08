@@ -1,0 +1,5 @@
+用于 x64 的 Microsoft (R) C/C++ 优化编译器 19.50.35721 版
+版权所有(C) Microsoft Corporation。保留所有权利。
+
+UltraImageViewer.cpp
+UltraImageViewer.cpp(117): error C3861: “FitImageToWindow”: 找不到标识符
