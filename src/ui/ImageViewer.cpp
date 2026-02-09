@@ -139,6 +139,20 @@ float ImageViewer::CalculateFitZoom(float imgW, float imgH) const
     return std::min(scaleX, scaleY);
 }
 
+D2D1_RECT_F ImageViewer::CalculatePanBounds() const
+{
+    if (!currentBitmap_) return D2D1::RectF(0, 0, 0, 0);
+    auto size = currentBitmap_->GetSize();
+    D2D1_RECT_F fitRect = CalculateFitRect(size.width, size.height);
+    float fitW = fitRect.right - fitRect.left;
+    float fitH = fitRect.bottom - fitRect.top;
+    float zoomedW = fitW * zoom_;
+    float zoomedH = fitH * zoom_;
+    float excessX = std::max(0.0f, (zoomedW - viewWidth_) * 0.5f);
+    float excessY = std::max(0.0f, (zoomedH - viewHeight_) * 0.5f);
+    return D2D1::RectF(-excessX, -excessY, excessX, excessY);
+}
+
 void ImageViewer::Render(Rendering::Direct2DRenderer* renderer)
 {
     if (!renderer) return;
@@ -315,31 +329,78 @@ void ImageViewer::OnMouseMove(float x, float y)
 
     if (!hasDragged_ && (std::abs(totalDx) > kDragThreshold || std::abs(totalDy) > kDragThreshold)) {
         hasDragged_ = true;
-        // Determine drag direction
-        if (zoom_ <= 1.01f && std::abs(totalDy) > std::abs(totalDx)) {
-            isDismissing_ = true;
+        bool isVertical = std::abs(totalDy) > std::abs(totalDx);
+
+        if (zoom_ <= 1.01f) {
+            // Not zoomed: vertical = dismiss, horizontal = page
+            if (isVertical) {
+                isDismissing_ = true;
+                dismissStartY_ = mouseDownY_;
+            } else {
+                isPaging_ = true;
+            }
         } else {
-            isPaging_ = (zoom_ <= 1.01f);
+            // Zoomed in: strongly vertical = dismiss immediately, otherwise = pan
+            bool isStronglyVertical = std::abs(totalDy) > std::abs(totalDx) * 1.5f;
+            if (isStronglyVertical) {
+                isDismissing_ = true;
+                dismissStartY_ = mouseDownY_;
+            }
+            // else: default pan (handled below), may transition to dismiss at boundary
         }
     }
 
     if (hasDragged_) {
         if (isDismissing_) {
-            float newDismiss = y - mouseDownY_;
+            float newDismiss = y - dismissStartY_;
             dismissSpring_.SetValue(newDismiss);
             dismissSpring_.SetTarget(newDismiss);
         } else if (isPaging_) {
             float newOffset = x - mouseDownX_;
             pageOffsetX_.SetValue(newOffset);
             pageOffsetX_.SetTarget(newOffset);
-        } else {
-            // Pan (zoomed in)
-            panXSpring_.SetValue(panX_ + dx);
-            panXSpring_.SetTarget(panX_ + dx);
-            panYSpring_.SetValue(panY_ + dy);
-            panYSpring_.SetTarget(panY_ + dy);
-            panX_ = panXSpring_.GetValue();
-            panY_ = panYSpring_.GetValue();
+        } else if (zoom_ > 1.01f) {
+            // Zoomed-in panning with boundary-triggered dismiss
+            float newPanX = panX_ + dx;
+            float newPanY = panY_ + dy;
+
+            auto bounds = CalculatePanBounds();
+
+            // Clamp X to bounds
+            newPanX = std::max(bounds.left, std::min(newPanX, bounds.right));
+
+            // Check if pulling past vertical boundary → transition to dismiss
+            if (newPanY > bounds.bottom + kDragThreshold) {
+                isDismissing_ = true;
+                dismissStartY_ = y;
+                dismissSpring_.SetValue(0.0f);
+                dismissSpring_.SetTarget(0.0f);
+                panY_ = bounds.bottom;
+                panYSpring_.SetValue(panY_);
+                panYSpring_.SetTarget(panY_);
+                panX_ = newPanX;
+                panXSpring_.SetValue(panX_);
+                panXSpring_.SetTarget(panX_);
+            } else if (newPanY < bounds.top - kDragThreshold) {
+                isDismissing_ = true;
+                dismissStartY_ = y;
+                dismissSpring_.SetValue(0.0f);
+                dismissSpring_.SetTarget(0.0f);
+                panY_ = bounds.top;
+                panYSpring_.SetValue(panY_);
+                panYSpring_.SetTarget(panY_);
+                panX_ = newPanX;
+                panXSpring_.SetValue(panX_);
+                panXSpring_.SetTarget(panX_);
+            } else {
+                // Normal pan within bounds
+                panX_ = newPanX;
+                panY_ = newPanY;
+                panXSpring_.SetValue(panX_);
+                panXSpring_.SetTarget(panX_);
+                panYSpring_.SetValue(panY_);
+                panYSpring_.SetTarget(panY_);
+            }
         }
     }
 
@@ -386,7 +447,20 @@ void ImageViewer::OnMouseUp(float x, float y)
     if (isDismissing_) {
         isDismissing_ = false;
         if (std::abs(dismissSpring_.GetValue()) > kDismissThreshold) {
-            // Dismiss
+            // Reset zoom/pan for clean transition back to gallery
+            zoom_ = 1.0f;
+            panX_ = 0.0f;
+            panY_ = 0.0f;
+            isZoomedIn_ = false;
+            zoomSpring_.SetValue(1.0f);
+            zoomSpring_.SetTarget(1.0f);
+            zoomSpring_.SnapToTarget();
+            panXSpring_.SetValue(0.0f);
+            panXSpring_.SetTarget(0.0f);
+            panXSpring_.SnapToTarget();
+            panYSpring_.SetValue(0.0f);
+            panYSpring_.SetTarget(0.0f);
+            panYSpring_.SnapToTarget();
             if (dismissCallback_) {
                 dismissCallback_(currentIndex_);
             }
@@ -422,11 +496,11 @@ void ImageViewer::OnMouseUp(float x, float y)
         }
     } else if (hasDragged_ && zoom_ > 1.01f) {
         // Bounce pan back if out of bounds
-        // Simple bounds check
-        if (zoom_ <= 1.01f) {
-            panXSpring_.SetTarget(0.0f);
-            panYSpring_.SetTarget(0.0f);
-        }
+        auto bounds = CalculatePanBounds();
+        float targetPanX = std::max(bounds.left, std::min(panX_, bounds.right));
+        float targetPanY = std::max(bounds.top, std::min(panY_, bounds.bottom));
+        panXSpring_.SetTarget(targetPanX);
+        panYSpring_.SetTarget(targetPanY);
     }
 }
 
@@ -459,12 +533,21 @@ void ImageViewer::OnKeyDown(UINT key)
             GoNext();
             break;
         case VK_ESCAPE:
-            if (isZoomedIn_) {
-                zoomSpring_.SetTarget(1.0f);
-                panXSpring_.SetTarget(0.0f);
-                panYSpring_.SetTarget(0.0f);
-                isZoomedIn_ = false;
-            } else if (dismissCallback_) {
+            // Always exit viewer on Escape — reset zoom/pan for clean transition
+            zoom_ = 1.0f;
+            panX_ = 0.0f;
+            panY_ = 0.0f;
+            isZoomedIn_ = false;
+            zoomSpring_.SetValue(1.0f);
+            zoomSpring_.SetTarget(1.0f);
+            zoomSpring_.SnapToTarget();
+            panXSpring_.SetValue(0.0f);
+            panXSpring_.SetTarget(0.0f);
+            panXSpring_.SnapToTarget();
+            panYSpring_.SetValue(0.0f);
+            panYSpring_.SetTarget(0.0f);
+            panYSpring_.SnapToTarget();
+            if (dismissCallback_) {
                 dismissCallback_(currentIndex_);
             }
             break;

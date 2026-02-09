@@ -55,6 +55,7 @@ private:
     // Calculate the fit rect for an image in the viewport
     D2D1_RECT_F CalculateFitRect(float imgW, float imgH) const;
     float CalculateFitZoom(float imgW, float imgH) const;
+    D2D1_RECT_F CalculatePanBounds() const;
 
     void LoadCurrentPage();
     void NavigateToPage(int direction);

@@ -82,7 +82,7 @@ set(SOURCES
 )
 
 # Create executable
-add_executable(ultra_image_viewer WIN32 ${SOURCES})
+add_executable(ultra_image_viewer WIN32 ${SOURCES} app.rc)
 
 target_include_directories(ultra_image_viewer PRIVATE include)
 
