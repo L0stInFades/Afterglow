@@ -313,6 +313,31 @@ void ImageViewer::Update(float deltaTime)
     panY_ = panYSpring_.GetValue();
     dismissOffsetY_ = dismissSpring_.GetValue();
 
+    // Committed dismiss: switch to gallery when image has moved far enough off-screen
+    if (isDismissCommitted_ && std::abs(dismissSpring_.GetValue()) > viewHeight_ * 0.35f) {
+        isDismissCommitted_ = false;
+        // Reset all state
+        zoom_ = 1.0f;
+        panX_ = 0.0f;
+        panY_ = 0.0f;
+        isZoomedIn_ = false;
+        zoomSpring_.SetValue(1.0f);
+        zoomSpring_.SetTarget(1.0f);
+        zoomSpring_.SnapToTarget();
+        panXSpring_.SetValue(0.0f);
+        panXSpring_.SetTarget(0.0f);
+        panXSpring_.SnapToTarget();
+        panYSpring_.SetValue(0.0f);
+        panYSpring_.SetTarget(0.0f);
+        panYSpring_.SnapToTarget();
+        dismissSpring_.SetValue(0.0f);
+        dismissSpring_.SetTarget(0.0f);
+        dismissSpring_.SnapToTarget();
+        if (dismissCallback_) {
+            dismissCallback_(currentIndex_);
+        }
+    }
+
     // Check if page navigation completed
     if (!isPaging_ && std::abs(pageOffsetX_.GetValue()) < 1.0f && pageOffsetX_.IsFinished()) {
         pageOffsetX_.SetValue(0.0f);
@@ -323,6 +348,7 @@ void ImageViewer::Update(float deltaTime)
 
 void ImageViewer::OnMouseDown(float x, float y)
 {
+    if (isDismissCommitted_) return;  // Don't accept input during exit animation
     isMouseDown_ = true;
     mouseDownX_ = x;
     mouseDownY_ = y;
@@ -335,7 +361,7 @@ void ImageViewer::OnMouseDown(float x, float y)
 
 void ImageViewer::OnMouseMove(float x, float y)
 {
-    if (!isMouseDown_) return;
+    if (!isMouseDown_ || isDismissCommitted_) return;
 
     float dx = x - lastMouseX_;
     float dy = y - lastMouseY_;
@@ -456,25 +482,20 @@ void ImageViewer::OnMouseUp(float x, float y)
     if (isDismissing_) {
         isDismissing_ = false;
         if (std::abs(dismissSpring_.GetValue()) > kDismissThreshold) {
-            // Reset zoom/pan for clean transition back to gallery
-            zoom_ = 1.0f;
-            panX_ = 0.0f;
-            panY_ = 0.0f;
-            isZoomedIn_ = false;
-            zoomSpring_.SetValue(1.0f);
-            zoomSpring_.SetTarget(1.0f);
-            zoomSpring_.SnapToTarget();
-            panXSpring_.SetValue(0.0f);
-            panXSpring_.SetTarget(0.0f);
-            panXSpring_.SnapToTarget();
-            panYSpring_.SetValue(0.0f);
-            panYSpring_.SetTarget(0.0f);
-            panYSpring_.SnapToTarget();
-            if (dismissCallback_) {
-                dismissCallback_(currentIndex_);
+            // Commit dismiss: fly image off-screen in drag direction with momentum
+            float direction = dismissSpring_.GetValue() > 0 ? 1.0f : -1.0f;
+            dismissSpring_.SetTarget(direction * viewHeight_);
+            dismissSpring_.SetVelocity(mouseVelocityY_);
+            isDismissCommitted_ = true;
+            // Animate zoom back to 1.0 if zoomed
+            if (zoom_ > 1.01f) {
+                zoomSpring_.SetTarget(1.0f);
+                panXSpring_.SetTarget(0.0f);
+                panYSpring_.SetTarget(0.0f);
             }
+        } else {
+            dismissSpring_.SetTarget(0.0f);
         }
-        dismissSpring_.SetTarget(0.0f);
     } else if (isPaging_) {
         isPaging_ = false;
         float offset = pageOffsetX_.GetValue();
@@ -542,22 +563,17 @@ void ImageViewer::OnKeyDown(UINT key)
             GoNext();
             break;
         case VK_ESCAPE:
-            // Always exit viewer on Escape — reset zoom/pan for clean transition
-            zoom_ = 1.0f;
-            panX_ = 0.0f;
-            panY_ = 0.0f;
-            isZoomedIn_ = false;
-            zoomSpring_.SetValue(1.0f);
-            zoomSpring_.SetTarget(1.0f);
-            zoomSpring_.SnapToTarget();
-            panXSpring_.SetValue(0.0f);
-            panXSpring_.SetTarget(0.0f);
-            panXSpring_.SnapToTarget();
-            panYSpring_.SetValue(0.0f);
-            panYSpring_.SetTarget(0.0f);
-            panYSpring_.SnapToTarget();
-            if (dismissCallback_) {
-                dismissCallback_(currentIndex_);
+            if (isDismissCommitted_) break;  // Already exiting
+            // Animate image downward off-screen
+            dismissSpring_.SetTarget(viewHeight_);
+            dismissSpring_.SetVelocity(1200.0f);
+            isDismissCommitted_ = true;
+            // Animate zoom back if zoomed
+            if (isZoomedIn_) {
+                zoomSpring_.SetTarget(1.0f);
+                panXSpring_.SetTarget(0.0f);
+                panYSpring_.SetTarget(0.0f);
+                isZoomedIn_ = false;
             }
             break;
     }

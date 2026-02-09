@@ -18,9 +18,11 @@ void ViewManager::Initialize(Rendering::Direct2DRenderer* renderer,
     imageViewer_.Initialize(renderer, pipeline, engine);
     transition_.Initialize(engine);
 
-    // Set up dismiss callback: viewer -> gallery
+    // Set up dismiss callback: viewer -> gallery (direct switch, no hero transition)
+    // The image has already animated off-screen, gallery is visible behind
     imageViewer_.SetDismissCallback([this](size_t index) {
-        TransitionToGallery();
+        state_ = ViewState::Gallery;
+        needsRender_ = true;
     });
 }
 

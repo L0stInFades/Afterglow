@@ -94,6 +94,7 @@ private:
     float dismissOffsetY_ = 0.0f;
     float dismissStartY_ = 0.0f;
     bool isDismissing_ = false;
+    bool isDismissCommitted_ = false;  // Dismiss confirmed, animating off-screen
     Animation::SpringAnimation dismissSpring_;
 
     // Interaction state
