@@ -215,6 +215,7 @@ private:
     Microsoft::WRL::ComPtr<IDWriteTextFormat> albumTitleFormat_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> albumCountFormat_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> backButtonFormat_;
+    Microsoft::WRL::ComPtr<IDWriteFactory> dwFactory_;  // Cached for per-frame text layout
 
     // Fast-scroll detection
     float scrollVelocitySmoothed_ = 0.0f;

@@ -327,11 +327,16 @@ void GalleryView::EnsureResources(Rendering::Direct2DRenderer* renderer)
         albumCountFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     }
 
-    backButtonFormat_ = renderer->CreateTextFormat(L"Segoe UI", 16.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    backButtonFormat_ = renderer->CreateTextFormat(L"Segoe UI", 15.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     if (backButtonFormat_) {
         backButtonFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
         backButtonFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     }
+
+    // Cache DWrite factory (avoid per-frame COM allocation)
+    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
+        __uuidof(IDWriteFactory),
+        reinterpret_cast<IUnknown**>(dwFactory_.GetAddressOf()));
 
     resourcesCreated_ = true;
 }
@@ -445,6 +450,11 @@ void GalleryView::Render(Rendering::Direct2DRenderer* renderer)
 
     ctx->Clear(Theme::Background);
 
+    // Flush decoded thumbnails once per frame (before any tab rendering)
+    if (pipeline_) {
+        pipeline_->FlushReadyThumbnails(Theme::MaxBitmapsPerFrame);
+    }
+
     float contentHeight = viewHeight_ - Theme::TabBarHeight;
 
     D2D1_RECT_F contentClip = D2D1::RectF(0, 0, viewWidth_, contentHeight);
@@ -476,17 +486,9 @@ void GalleryView::Render(Rendering::Direct2DRenderer* renderer)
             RenderFolderDetail(renderer, ctx, contentHeight);
 
             // Edge shadow on left side of incoming folder detail
-            {
-                float shadowAlpha = 0.25f * (1.0f - t);
-                if (shadowAlpha > 0.001f) {
-                    D2D1_COLOR_F shadowColor = {0.0f, 0.0f, 0.0f, shadowAlpha};
-                    ComPtr<ID2D1SolidColorBrush> shadowBrush;
-                    ctx->CreateSolidColorBrush(shadowColor, &shadowBrush);
-                    if (shadowBrush) {
-                        ctx->FillRectangle(
-                            D2D1::RectF(-12.0f, 0, 0, contentHeight), shadowBrush.Get());
-                    }
-                }
+            if (scrollIndicatorBrush_) {
+                ctx->FillRectangle(
+                    D2D1::RectF(-8.0f, 0, 0, contentHeight), scrollIndicatorBrush_.Get());
             }
 
             ctx->SetTransform(savedTransform);
@@ -647,11 +649,6 @@ void GalleryView::RenderPhotosTab(Rendering::Direct2DRenderer* renderer,
 
     float scroll = scrollY_.GetValue();
 
-    // Flush decoded thumbnails to GPU (up to MaxBitmapsPerFrame per frame)
-    if (pipeline_) {
-        pipeline_->FlushReadyThumbnails(Theme::MaxBitmapsPerFrame);
-    }
-
     // === Image grid FIRST (rendered behind header) ===
     auto* factory = renderer->GetFactory();
     float dpiScale = renderer->GetDpiX() / 96.0f;
@@ -766,11 +763,6 @@ void GalleryView::RenderPhotosTab(Rendering::Direct2DRenderer* renderer,
 void GalleryView::RenderAlbumsTab(Rendering::Direct2DRenderer* renderer,
                                    ID2D1DeviceContext* ctx, float contentHeight)
 {
-    // Flush decoded thumbnails to GPU
-    if (pipeline_) {
-        pipeline_->FlushReadyThumbnails(Theme::MaxBitmapsPerFrame);
-    }
-
     auto* factory = renderer->GetFactory();
     float scroll = albumsScrollY_.GetValue();
 
@@ -912,11 +904,6 @@ void GalleryView::RenderFolderDetail(Rendering::Direct2DRenderer* renderer,
 
     float scroll = folderDetailScrollY_.GetValue();
 
-    // Flush decoded thumbnails to GPU
-    if (pipeline_) {
-        pipeline_->FlushReadyThumbnails(Theme::MaxBitmapsPerFrame);
-    }
-
     // === Image grid FIRST (rendered behind header) ===
     auto* factory = renderer->GetFactory();
     float dpiScale = renderer->GetDpiX() / 96.0f;
@@ -943,67 +930,54 @@ void GalleryView::RenderFolderDetail(Rendering::Direct2DRenderer* renderer,
             bgBrush_.Get());
     }
 
-    // Back button (pill shape) + folder title on same row — Y: 10..38
+    // iOS-style back: "< 相册" in accent + folder title (bold, large) on second line
     {
-        float btnX = Theme::GalleryPadding;
-        float btnY = 10.0f;
-        float btnH = 28.0f;
-        float btnW = 76.0f;
-        D2D1_RECT_F btnRect = D2D1::RectF(btnX, btnY, btnX + btnW, btnY + btnH);
-        D2D1_ROUNDED_RECT pill = {btnRect, btnH * 0.5f, btnH * 0.5f};
+        float lineY = 10.0f;
+        float lineH = 24.0f;
 
-        bool hovered = (hoverX_ >= btnRect.left && hoverX_ <= btnRect.right &&
-                        hoverY_ >= btnRect.top && hoverY_ <= btnRect.bottom);
-        if (cellBrush_) ctx->FillRoundedRectangle(pill, cellBrush_.Get());
-        if (hovered && hoverBrush_) {
-            ctx->FillRoundedRectangle(pill, hoverBrush_.Get());
-        }
-
+        // "< 相册" — back text in accent color (hit area for click)
         if (backButtonFormat_ && accentBrush_) {
-            D2D1_RECT_F textRect = D2D1::RectF(btnX, btnY, btnX + btnW, btnY + btnH);
-            backButtonFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-            ctx->DrawText(L"\u2190 Back", 6, backButtonFormat_.Get(), textRect, accentBrush_.Get());
-            backButtonFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            D2D1_RECT_F backRect = D2D1::RectF(
+                Theme::GalleryPadding, lineY,
+                Theme::GalleryPadding + 80.0f, lineY + lineH);
+            ctx->DrawText(L"\u2039 \u76F8\u518C", 4,
+                          backButtonFormat_.Get(), backRect, accentBrush_.Get());
         }
 
-        // Folder title — to the right of back button, same row, with ellipsis trimming
-        if (textBrush_ && backButtonFormat_) {
-            float titleX = btnX + btnW + 10.0f;
-            float titleMaxW = viewWidth_ - Theme::GalleryPadding - titleX;
-            if (titleMaxW > 0) {
-                Microsoft::WRL::ComPtr<IDWriteFactory> dwFactory;
-                HRESULT hr = DWriteCreateFactory(
-                    DWRITE_FACTORY_TYPE_SHARED,
-                    __uuidof(IDWriteFactory),
-                    reinterpret_cast<IUnknown**>(dwFactory.GetAddressOf()));
-                if (SUCCEEDED(hr) && dwFactory) {
-                    Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
-                    hr = dwFactory->CreateTextLayout(
-                        album.displayName.c_str(),
-                        static_cast<UINT32>(album.displayName.size()),
-                        backButtonFormat_.Get(),
-                        titleMaxW, btnH, &layout);
-                    if (SUCCEEDED(hr) && layout) {
-                        layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-                        Microsoft::WRL::ComPtr<IDWriteInlineObject> ellipsis;
-                        dwFactory->CreateEllipsisTrimmingSign(backButtonFormat_.Get(), &ellipsis);
-                        DWRITE_TRIMMING trimming = { DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0 };
-                        layout->SetTrimming(&trimming, ellipsis.Get());
-                        ctx->DrawTextLayout(D2D1::Point2F(titleX, btnY), layout.Get(), textBrush_.Get());
-                    }
+        // Folder title — large bold, below the back text
+        if (textBrush_ && titleFormat_) {
+            float titleY = lineY + lineH + 4.0f;
+            float titleH = 36.0f;
+            float titleMaxW = viewWidth_ - Theme::GalleryPadding * 2;
+            if (titleMaxW > 0 && dwFactory_) {
+                ComPtr<IDWriteTextLayout> layout;
+                HRESULT hr = dwFactory_->CreateTextLayout(
+                    album.displayName.c_str(),
+                    static_cast<UINT32>(album.displayName.size()),
+                    titleFormat_.Get(),
+                    titleMaxW, titleH, &layout);
+                if (SUCCEEDED(hr) && layout) {
+                    layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                    ComPtr<IDWriteInlineObject> ellipsis;
+                    dwFactory_->CreateEllipsisTrimmingSign(titleFormat_.Get(), &ellipsis);
+                    DWRITE_TRIMMING trimming = { DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0 };
+                    layout->SetTrimming(&trimming, ellipsis.Get());
+                    ctx->DrawTextLayout(
+                        D2D1::Point2F(Theme::GalleryPadding, titleY),
+                        layout.Get(), textBrush_.Get());
                 }
             }
         }
-    }
 
-    // Subtitle — Y: 42..58 (shifted up since title moved into back button row)
-    if (countFormat_ && secondaryBrush_) {
-        D2D1_RECT_F subtitleRect = D2D1::RectF(
-            Theme::GalleryPadding, 42.0f,
-            viewWidth_ - Theme::GalleryPadding, 58.0f);
-        std::wstring sub = FormatNumber(folderDetailImages_.size()) + L" photos";
-        ctx->DrawText(sub.c_str(), static_cast<UINT32>(sub.size()),
-                      countFormat_.Get(), subtitleRect, secondaryBrush_.Get());
+        // Subtitle: photo count, below folder title
+        if (countFormat_ && secondaryBrush_) {
+            D2D1_RECT_F subtitleRect = D2D1::RectF(
+                Theme::GalleryPadding, lineY + lineH + 42.0f,
+                viewWidth_ - Theme::GalleryPadding, lineY + lineH + 58.0f);
+            std::wstring sub = FormatNumber(folderDetailImages_.size()) + L" photos";
+            ctx->DrawText(sub.c_str(), static_cast<UINT32>(sub.size()),
+                          countFormat_.Get(), subtitleRect, secondaryBrush_.Get());
+        }
     }
 
     // Scroll indicator
@@ -1287,12 +1261,12 @@ void GalleryView::OnMouseUp(float x, float y)
             return;
         }
 
-        // Back button in folder detail — match actual pill rect
+        // Back button in folder detail — "< 相册" text area
         if (activeTab_ == GalleryTab::Albums && inFolderDetail_) {
             float btnX = Theme::GalleryPadding;
-            float btnY = 10.0f;
-            float btnW = 76.0f;
-            float btnH = 28.0f;
+            float btnY = 6.0f;
+            float btnW = 80.0f;
+            float btnH = 32.0f;
             if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) {
                 ExitFolderDetail();
                 consumedClick_ = true;

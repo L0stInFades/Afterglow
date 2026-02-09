@@ -56,9 +56,9 @@ namespace Theme {
     // Bouncy for rubber band
     constexpr float RubberBandStiffness = 400.0f;
     constexpr float RubberBandDamping = 30.0f;
-    // Navigation push/pop (album enter/exit)
-    constexpr float NavigationStiffness = 400.0f;
-    constexpr float NavigationDamping = 32.0f;
+    // Navigation push/pop (album enter/exit) — critically damped for snappy feel
+    constexpr float NavigationStiffness = 500.0f;
+    constexpr float NavigationDamping = 40.0f;
 
     // Performance tuning
     constexpr float FastScrollThreshold = 2000.0f;      // px/sec scroll velocity to trigger fast-scroll mode
