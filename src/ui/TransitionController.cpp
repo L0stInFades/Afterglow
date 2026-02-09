@@ -60,6 +60,7 @@ void TransitionController::StartViewerToGallery(
     Microsoft::WRL::ComPtr<ID2D1Bitmap> image,
     D2D1_RECT_F fromRect,
     D2D1_RECT_F toRect,
+    float initialOpacity,
     std::function<void()> onComplete)
 {
     transitionBitmap_ = image;
@@ -76,7 +77,8 @@ void TransitionController::StartViewerToGallery(
     rectH_.SetValue(fromRect.bottom - fromRect.top);
     rectH_.SetTarget(toRect.bottom - toRect.top);
 
-    opacity_.SetValue(1.0f);
+    // Start from current overlay opacity (seamless handoff from viewer)
+    opacity_.SetValue(initialOpacity);
     opacity_.SetTarget(0.0f);
 
     cornerRadius_.SetValue(0.0f);

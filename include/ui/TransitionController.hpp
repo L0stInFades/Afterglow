@@ -30,6 +30,7 @@ public:
         Microsoft::WRL::ComPtr<ID2D1Bitmap> image,
         D2D1_RECT_F fromRect,
         D2D1_RECT_F toRect,
+        float initialOpacity,
         std::function<void()> onComplete
     );
 

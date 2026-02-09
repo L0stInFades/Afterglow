@@ -18,10 +18,33 @@ void ViewManager::Initialize(Rendering::Direct2DRenderer* renderer,
     imageViewer_.Initialize(renderer, pipeline, engine);
     transition_.Initialize(engine);
 
-    // Set up dismiss callback: viewer -> gallery (direct switch, no hero transition)
-    // The image has already animated off-screen, gallery is visible behind
+    // Set up dismiss callback: hero transition from image's actual position to gallery cell
     imageViewer_.SetDismissCallback([this](size_t index) {
-        state_ = ViewState::Gallery;
+        if (state_ != ViewState::Viewer) return;
+
+        // Read actual on-screen position BEFORE viewer resets
+        D2D1_RECT_F fromRect = imageViewer_.GetCurrentScreenRect();
+        float bgAlpha = imageViewer_.GetCurrentBgAlpha();
+
+        // Get target gallery cell rect
+        auto cellRect = galleryView_.GetCellScreenRect(index);
+        D2D1_RECT_F toRect = cellRect.value_or(D2D1::RectF(
+            viewWidth_ * 0.5f - 50.0f, viewHeight_ * 0.5f - 50.0f,
+            viewWidth_ * 0.5f + 50.0f, viewHeight_ * 0.5f + 50.0f));
+
+        auto& images = imageViewer_.GetImages();
+        auto bitmap = pipeline_ ? pipeline_->GetThumbnail(images[index]) : nullptr;
+
+        if (bitmap) {
+            pendingState_ = ViewState::Gallery;
+            state_ = ViewState::Transition;
+            transition_.StartViewerToGallery(bitmap, fromRect, toRect, bgAlpha, [this]() {
+                state_ = ViewState::Gallery;
+                needsRender_ = true;
+            });
+        } else {
+            state_ = ViewState::Gallery;
+        }
         needsRender_ = true;
     });
 }
@@ -48,12 +71,8 @@ void ViewManager::Render(Rendering::Direct2DRenderer* renderer)
             break;
 
         case ViewState::Transition:
-            // Render the background view
-            if (pendingState_ == ViewState::Viewer) {
-                galleryView_.Render(renderer);
-            } else {
-                imageViewer_.Render(renderer);
-            }
+            // Always render gallery as background
+            galleryView_.Render(renderer);
             // Render transition on top
             transition_.Render(renderer);
             break;
@@ -137,7 +156,7 @@ void ViewManager::TransitionToGallery()
         pendingState_ = ViewState::Gallery;
         state_ = ViewState::Transition;
 
-        transition_.StartViewerToGallery(bitmap, fromRect, toRect, [this]() {
+        transition_.StartViewerToGallery(bitmap, fromRect, toRect, 1.0f, [this]() {
             state_ = ViewState::Gallery;
             needsRender_ = true;
         });

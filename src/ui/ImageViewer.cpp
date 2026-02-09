@@ -313,31 +313,6 @@ void ImageViewer::Update(float deltaTime)
     panY_ = panYSpring_.GetValue();
     dismissOffsetY_ = dismissSpring_.GetValue();
 
-    // Committed dismiss: switch to gallery when image has moved far enough off-screen
-    if (isDismissCommitted_ && std::abs(dismissSpring_.GetValue()) > viewHeight_ * 0.35f) {
-        isDismissCommitted_ = false;
-        // Reset all state
-        zoom_ = 1.0f;
-        panX_ = 0.0f;
-        panY_ = 0.0f;
-        isZoomedIn_ = false;
-        zoomSpring_.SetValue(1.0f);
-        zoomSpring_.SetTarget(1.0f);
-        zoomSpring_.SnapToTarget();
-        panXSpring_.SetValue(0.0f);
-        panXSpring_.SetTarget(0.0f);
-        panXSpring_.SnapToTarget();
-        panYSpring_.SetValue(0.0f);
-        panYSpring_.SetTarget(0.0f);
-        panYSpring_.SnapToTarget();
-        dismissSpring_.SetValue(0.0f);
-        dismissSpring_.SetTarget(0.0f);
-        dismissSpring_.SnapToTarget();
-        if (dismissCallback_) {
-            dismissCallback_(currentIndex_);
-        }
-    }
-
     // Check if page navigation completed
     if (!isPaging_ && std::abs(pageOffsetX_.GetValue()) < 1.0f && pageOffsetX_.IsFinished()) {
         pageOffsetX_.SetValue(0.0f);
@@ -348,7 +323,6 @@ void ImageViewer::Update(float deltaTime)
 
 void ImageViewer::OnMouseDown(float x, float y)
 {
-    if (isDismissCommitted_) return;  // Don't accept input during exit animation
     isMouseDown_ = true;
     mouseDownX_ = x;
     mouseDownY_ = y;
@@ -361,7 +335,7 @@ void ImageViewer::OnMouseDown(float x, float y)
 
 void ImageViewer::OnMouseMove(float x, float y)
 {
-    if (!isMouseDown_ || isDismissCommitted_) return;
+    if (!isMouseDown_) return;
 
     float dx = x - lastMouseX_;
     float dy = y - lastMouseY_;
@@ -482,17 +456,28 @@ void ImageViewer::OnMouseUp(float x, float y)
     if (isDismissing_) {
         isDismissing_ = false;
         if (std::abs(dismissSpring_.GetValue()) > kDismissThreshold) {
-            // Commit dismiss: fly image off-screen in drag direction with momentum
-            float direction = dismissSpring_.GetValue() > 0 ? 1.0f : -1.0f;
-            dismissSpring_.SetTarget(direction * viewHeight_);
-            dismissSpring_.SetVelocity(mouseVelocityY_);
-            isDismissCommitted_ = true;
-            // Animate zoom back to 1.0 if zoomed
-            if (zoom_ > 1.01f) {
-                zoomSpring_.SetTarget(1.0f);
-                panXSpring_.SetTarget(0.0f);
-                panYSpring_.SetTarget(0.0f);
+            // Reset zoom/pan but keep dismiss offset — ViewManager reads it for transition
+            zoom_ = 1.0f;
+            panX_ = 0.0f;
+            panY_ = 0.0f;
+            isZoomedIn_ = false;
+            zoomSpring_.SetValue(1.0f);
+            zoomSpring_.SetTarget(1.0f);
+            zoomSpring_.SnapToTarget();
+            panXSpring_.SetValue(0.0f);
+            panXSpring_.SetTarget(0.0f);
+            panXSpring_.SnapToTarget();
+            panYSpring_.SetValue(0.0f);
+            panYSpring_.SetTarget(0.0f);
+            panYSpring_.SnapToTarget();
+            // Call callback BEFORE resetting dismiss (ViewManager reads current screen rect)
+            if (dismissCallback_) {
+                dismissCallback_(currentIndex_);
             }
+            // Now reset dismiss
+            dismissSpring_.SetValue(0.0f);
+            dismissSpring_.SetTarget(0.0f);
+            dismissSpring_.SnapToTarget();
         } else {
             dismissSpring_.SetTarget(0.0f);
         }
@@ -563,17 +548,23 @@ void ImageViewer::OnKeyDown(UINT key)
             GoNext();
             break;
         case VK_ESCAPE:
-            if (isDismissCommitted_) break;  // Already exiting
-            // Animate image downward off-screen
-            dismissSpring_.SetTarget(viewHeight_);
-            dismissSpring_.SetVelocity(1200.0f);
-            isDismissCommitted_ = true;
-            // Animate zoom back if zoomed
-            if (isZoomedIn_) {
-                zoomSpring_.SetTarget(1.0f);
-                panXSpring_.SetTarget(0.0f);
-                panYSpring_.SetTarget(0.0f);
-                isZoomedIn_ = false;
+            // Reset zoom/pan for clean hero transition from center
+            zoom_ = 1.0f;
+            panX_ = 0.0f;
+            panY_ = 0.0f;
+            isZoomedIn_ = false;
+            zoomSpring_.SetValue(1.0f);
+            zoomSpring_.SetTarget(1.0f);
+            zoomSpring_.SnapToTarget();
+            panXSpring_.SetValue(0.0f);
+            panXSpring_.SetTarget(0.0f);
+            panXSpring_.SnapToTarget();
+            panYSpring_.SetValue(0.0f);
+            panYSpring_.SetTarget(0.0f);
+            panYSpring_.SnapToTarget();
+            // dismissSpring_ is at 0 → GetCurrentScreenRect returns centered fit rect
+            if (dismissCallback_) {
+                dismissCallback_(currentIndex_);
             }
             break;
     }
@@ -586,6 +577,53 @@ D2D1_RECT_F ImageViewer::GetCurrentImageRect() const
     }
     auto size = currentBitmap_->GetSize();
     return CalculateFitRect(size.width, size.height);
+}
+
+D2D1_RECT_F ImageViewer::GetCurrentScreenRect() const
+{
+    if (!currentBitmap_) {
+        return D2D1::RectF(0, 0, viewWidth_, viewHeight_);
+    }
+    auto size = currentBitmap_->GetSize();
+    D2D1_RECT_F fitRect = CalculateFitRect(size.width, size.height);
+
+    float currentZoom = zoomSpring_.GetValue();
+    float currentPanX = panXSpring_.GetValue();
+    float currentPanY = panYSpring_.GetValue();
+    float dismissY = dismissSpring_.GetValue();
+
+    float centerX = viewWidth_ * 0.5f;
+    float centerY = viewHeight_ * 0.5f;
+    float w = (fitRect.right - fitRect.left) * currentZoom;
+    float h = (fitRect.bottom - fitRect.top) * currentZoom;
+
+    D2D1_RECT_F rect = D2D1::RectF(
+        centerX - w * 0.5f + currentPanX,
+        centerY - h * 0.5f + currentPanY + dismissY,
+        centerX + w * 0.5f + currentPanX,
+        centerY + h * 0.5f + currentPanY + dismissY
+    );
+
+    // Apply dismiss scale (same formula as Render)
+    float dismissScale = 1.0f - std::abs(dismissY) / (viewHeight_ * 2.0f);
+    dismissScale = std::max(0.5f, dismissScale);
+    if (dismissScale < 1.0f) {
+        float dw = (rect.right - rect.left) * (1.0f - dismissScale) * 0.5f;
+        float dh = (rect.bottom - rect.top) * (1.0f - dismissScale) * 0.5f;
+        rect.left += dw;
+        rect.top += dh;
+        rect.right -= dw;
+        rect.bottom -= dh;
+    }
+
+    return rect;
+}
+
+float ImageViewer::GetCurrentBgAlpha() const
+{
+    float dismissY = dismissSpring_.GetValue();
+    float bgAlpha = 1.0f - std::abs(dismissY) / (viewHeight_ * 0.5f);
+    return std::max(0.0f, std::min(1.0f, bgAlpha));
 }
 
 void ImageViewer::SetViewSize(float width, float height)

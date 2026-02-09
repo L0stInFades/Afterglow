@@ -43,6 +43,10 @@ public:
     // Get current image rect (for hero transition return)
     D2D1_RECT_F GetCurrentImageRect() const;
 
+    // Get actual on-screen rect (including dismiss offset, zoom, pan, scale)
+    D2D1_RECT_F GetCurrentScreenRect() const;
+    float GetCurrentBgAlpha() const;
+
     // Dismiss callback (back to gallery)
     using DismissCallback = std::function<void(size_t index)>;
     void SetDismissCallback(DismissCallback cb) { dismissCallback_ = std::move(cb); }
@@ -94,7 +98,6 @@ private:
     float dismissOffsetY_ = 0.0f;
     float dismissStartY_ = 0.0f;
     bool isDismissing_ = false;
-    bool isDismissCommitted_ = false;  // Dismiss confirmed, animating off-screen
     Animation::SpringAnimation dismissSpring_;
 
     // Interaction state
