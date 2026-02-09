@@ -176,6 +176,14 @@ private:
     mutable std::vector<SectionLayoutInfo> folderDetailSectionLayouts_;
     mutable float folderDetailCachedTotalHeight_ = 0.0f;
 
+    // Folder detail navigation transition
+    Animation::SpringAnimation folderSlide_;  // 0=albums grid, 1=folder detail
+    bool folderTransitionActive_ = false;
+    bool folderTransitionForward_ = true;
+
+    // Tab indicator animation
+    Animation::SpringAnimation tabSlide_;  // 0=Photos, 1=Albums
+
     Core::ImagePipeline* pipeline_ = nullptr;
     Animation::AnimationEngine* engine_ = nullptr;
 

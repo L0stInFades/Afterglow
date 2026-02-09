@@ -56,6 +56,9 @@ namespace Theme {
     // Bouncy for rubber band
     constexpr float RubberBandStiffness = 400.0f;
     constexpr float RubberBandDamping = 30.0f;
+    // Navigation push/pop (album enter/exit)
+    constexpr float NavigationStiffness = 400.0f;
+    constexpr float NavigationDamping = 32.0f;
 
 } // namespace Theme
 } // namespace UI

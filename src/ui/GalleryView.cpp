@@ -58,6 +58,8 @@ GalleryView::GalleryView()
     : scrollY_(Animation::SpringConfig{Theme::ScrollStiffness, Theme::ScrollDamping, 1.0f, 0.5f})
     , albumsScrollY_(Animation::SpringConfig{Theme::ScrollStiffness, Theme::ScrollDamping, 1.0f, 0.5f})
     , folderDetailScrollY_(Animation::SpringConfig{Theme::ScrollStiffness, Theme::ScrollDamping, 1.0f, 0.5f})
+    , folderSlide_(Animation::SpringConfig{Theme::NavigationStiffness, Theme::NavigationDamping, 1.0f, 0.005f})
+    , tabSlide_(Animation::SpringConfig{Theme::NavigationStiffness, Theme::NavigationDamping, 1.0f, 0.005f})
 {
     scrollY_.SetValue(0.0f);
     scrollY_.SetTarget(0.0f);
@@ -70,6 +72,14 @@ GalleryView::GalleryView()
     folderDetailScrollY_.SetValue(0.0f);
     folderDetailScrollY_.SetTarget(0.0f);
     folderDetailScrollY_.SnapToTarget();
+
+    folderSlide_.SetValue(0.0f);
+    folderSlide_.SetTarget(0.0f);
+    folderSlide_.SnapToTarget();
+
+    tabSlide_.SetValue(0.0f);
+    tabSlide_.SetTarget(0.0f);
+    tabSlide_.SnapToTarget();
 }
 
 GalleryView::~GalleryView() = default;
@@ -241,13 +251,20 @@ void GalleryView::EnterFolderDetail(size_t albumIndex)
     folderDetailScrollY_.SetTarget(0.0f);
     folderDetailScrollY_.SnapToTarget();
     folderDetailMaxScroll_ = 0.0f;
+
+    // Start navigation push animation
+    folderSlide_.SetValue(0.0f);
+    folderSlide_.SetTarget(1.0f);
+    folderTransitionActive_ = true;
+    folderTransitionForward_ = true;
 }
 
 void GalleryView::ExitFolderDetail()
 {
-    inFolderDetail_ = false;
-    folderDetailImages_.clear();
-    folderDetailSections_.clear();
+    // Start navigation pop animation — data cleared on completion
+    folderSlide_.SetTarget(0.0f);
+    folderTransitionActive_ = true;
+    folderTransitionForward_ = false;
 }
 
 void GalleryView::EnsureResources(Rendering::Direct2DRenderer* renderer)
@@ -435,7 +452,44 @@ void GalleryView::Render(Rendering::Direct2DRenderer* renderer)
     if (activeTab_ == GalleryTab::Photos) {
         RenderPhotosTab(renderer, ctx, contentHeight);
     } else {
-        if (inFolderDetail_) {
+        if (folderTransitionActive_) {
+            float t = std::clamp(folderSlide_.GetValue(), 0.0f, 1.0f);
+
+            D2D1_MATRIX_3X2_F savedTransform;
+            ctx->GetTransform(&savedTransform);
+
+            // Albums grid slides left (parallax, 30% of screen width)
+            ctx->SetTransform(
+                D2D1::Matrix3x2F::Translation(-t * viewWidth_ * 0.3f, 0) * savedTransform);
+            RenderAlbumsTab(renderer, ctx, contentHeight);
+
+            // Folder detail slides in from right
+            float detailOffset = (1.0f - t) * viewWidth_;
+            ctx->SetTransform(
+                D2D1::Matrix3x2F::Translation(detailOffset, 0) * savedTransform);
+            // Opaque background so albums don't show through gaps
+            if (bgBrush_) {
+                ctx->FillRectangle(
+                    D2D1::RectF(0, 0, viewWidth_, contentHeight), bgBrush_.Get());
+            }
+            RenderFolderDetail(renderer, ctx, contentHeight);
+
+            // Edge shadow on left side of incoming folder detail
+            {
+                float shadowAlpha = 0.25f * (1.0f - t);
+                if (shadowAlpha > 0.001f) {
+                    D2D1_COLOR_F shadowColor = {0.0f, 0.0f, 0.0f, shadowAlpha};
+                    ComPtr<ID2D1SolidColorBrush> shadowBrush;
+                    ctx->CreateSolidColorBrush(shadowColor, &shadowBrush);
+                    if (shadowBrush) {
+                        ctx->FillRectangle(
+                            D2D1::RectF(-12.0f, 0, 0, contentHeight), shadowBrush.Get());
+                    }
+                }
+            }
+
+            ctx->SetTransform(savedTransform);
+        } else if (inFolderDetail_) {
             RenderFolderDetail(renderer, ctx, contentHeight);
         } else {
             RenderAlbumsTab(renderer, ctx, contentHeight);
@@ -938,21 +992,24 @@ void GalleryView::RenderTabBar(ID2D1DeviceContext* ctx)
         {L"\u76F8\u518C", 2, GalleryTab::Albums},
     };
 
+    // Animated tab indicator
+    if (accentBrush_) {
+        float indicatorW = 28.0f;
+        float pos0 = halfWidth * 0.5f - indicatorW * 0.5f;
+        float pos1 = halfWidth + halfWidth * 0.5f - indicatorW * 0.5f;
+        float tabT = std::clamp(tabSlide_.GetValue(), 0.0f, 1.0f);
+        float indicatorX = pos0 + tabT * (pos1 - pos0);
+        D2D1_ROUNDED_RECT indicator = {
+            D2D1::RectF(indicatorX, tabBarTop + 4.0f,
+                         indicatorX + indicatorW, tabBarTop + 6.5f),
+            1.25f, 1.25f
+        };
+        ctx->FillRoundedRectangle(indicator, accentBrush_.Get());
+    }
+
     for (int t = 0; t < 2; ++t) {
         float tabX = t * halfWidth;
         bool isActive = (activeTab_ == tabs[t].tab);
-
-        // Active indicator bar
-        if (isActive && accentBrush_) {
-            float indicatorW = 28.0f;
-            float indicatorX = tabX + halfWidth * 0.5f - indicatorW * 0.5f;
-            D2D1_ROUNDED_RECT indicator = {
-                D2D1::RectF(indicatorX, tabBarTop + 4.0f,
-                             indicatorX + indicatorW, tabBarTop + 6.5f),
-                1.25f, 1.25f
-            };
-            ctx->FillRoundedRectangle(indicator, accentBrush_.Get());
-        }
 
         // Label
         D2D1_RECT_F tabRect = D2D1::RectF(tabX, tabBarTop + 8.0f,
@@ -975,6 +1032,19 @@ void GalleryView::Update(float deltaTime)
     scrollY_.Update(deltaTime);
     albumsScrollY_.Update(deltaTime);
     folderDetailScrollY_.Update(deltaTime);
+    folderSlide_.Update(deltaTime);
+    tabSlide_.Update(deltaTime);
+
+    // Check folder navigation transition completion
+    if (folderTransitionActive_ && folderSlide_.IsFinished()) {
+        folderTransitionActive_ = false;
+        if (!folderTransitionForward_) {
+            // Pop animation completed — clean up
+            inFolderDetail_ = false;
+            folderDetailImages_.clear();
+            folderDetailSections_.clear();
+        }
+    }
 
     auto rubberBand = [&](Animation::SpringAnimation& spring, float maxScr) {
         if (!isDragging_) {
@@ -1110,16 +1180,30 @@ void GalleryView::OnMouseUp(float x, float y)
     }
 
     if (!hasDragged_) {
-        // Tab bar
+        // Tab bar (always clickable, even during transition)
         float tabBarTop = viewHeight_ - Theme::TabBarHeight;
         if (y >= tabBarTop && y <= viewHeight_) {
             float halfWidth = viewWidth_ / 2.0f;
             if (x < halfWidth) {
                 activeTab_ = GalleryTab::Photos;
-                if (inFolderDetail_) ExitFolderDetail();
+                tabSlide_.SetTarget(0.0f);
+                if (inFolderDetail_) {
+                    // Instant exit when switching tabs (no animation)
+                    inFolderDetail_ = false;
+                    folderTransitionActive_ = false;
+                    folderDetailImages_.clear();
+                    folderDetailSections_.clear();
+                }
             } else {
                 activeTab_ = GalleryTab::Albums;
+                tabSlide_.SetTarget(1.0f);
             }
+            consumedClick_ = true;
+            return;
+        }
+
+        // Block other clicks during folder navigation transition
+        if (folderTransitionActive_) {
             consumedClick_ = true;
             return;
         }
