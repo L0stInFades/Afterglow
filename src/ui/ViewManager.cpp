@@ -40,7 +40,13 @@ void ViewManager::Render(Rendering::Direct2DRenderer* renderer)
             break;
 
         case ViewState::Viewer:
-            imageViewer_.Render(renderer);
+            if (imageViewer_.IsDismissActive()) {
+                // iOS-style: render gallery behind, then viewer as overlay
+                galleryView_.Render(renderer);
+                imageViewer_.Render(renderer, true);
+            } else {
+                imageViewer_.Render(renderer);
+            }
             break;
 
         case ViewState::Transition:

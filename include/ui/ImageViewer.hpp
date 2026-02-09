@@ -27,8 +27,11 @@ public:
     size_t GetCurrentIndex() const { return currentIndex_; }
     const std::vector<std::filesystem::path>& GetImages() const { return images_; }
 
-    void Render(Rendering::Direct2DRenderer* renderer);
+    void Render(Rendering::Direct2DRenderer* renderer, bool overlayMode = false);
     void Update(float deltaTime);
+
+    // Whether dismiss gesture is active (for ViewManager to render gallery behind)
+    bool IsDismissActive() const;
 
     // Mouse/gesture interaction
     void OnMouseDown(float x, float y);

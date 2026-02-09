@@ -153,7 +153,12 @@ D2D1_RECT_F ImageViewer::CalculatePanBounds() const
     return D2D1::RectF(-excessX, -excessY, excessX, excessY);
 }
 
-void ImageViewer::Render(Rendering::Direct2DRenderer* renderer)
+bool ImageViewer::IsDismissActive() const
+{
+    return std::abs(dismissSpring_.GetValue()) > 1.0f;
+}
+
+void ImageViewer::Render(Rendering::Direct2DRenderer* renderer, bool overlayMode)
 {
     if (!renderer) return;
     EnsureResources(renderer);
@@ -168,8 +173,18 @@ void ImageViewer::Render(Rendering::Direct2DRenderer* renderer)
     // Background with opacity based on dismiss
     float bgAlpha = 1.0f - std::abs(dismissY) / (viewHeight_ * 0.5f);
     bgAlpha = std::max(0.0f, std::min(1.0f, bgAlpha));
-    D2D1_COLOR_F bgColor = {0.0f, 0.0f, 0.0f, bgAlpha};
-    ctx->Clear(bgColor);
+
+    if (overlayMode) {
+        // Draw semi-transparent black overlay on top of gallery
+        if (bgBrush_) {
+            bgBrush_->SetOpacity(bgAlpha);
+            ctx->FillRectangle(D2D1::RectF(0, 0, viewWidth_, viewHeight_), bgBrush_.Get());
+            bgBrush_->SetOpacity(1.0f);
+        }
+    } else {
+        D2D1_COLOR_F bgColor = {0.0f, 0.0f, 0.0f, bgAlpha};
+        ctx->Clear(bgColor);
+    }
 
     float pageOffset = pageOffsetX_.GetValue();
     float currentZoom = zoomSpring_.GetValue();
@@ -340,13 +355,7 @@ void ImageViewer::OnMouseMove(float x, float y)
                 isPaging_ = true;
             }
         } else {
-            // Zoomed in: strongly vertical = dismiss immediately, otherwise = pan
-            bool isStronglyVertical = std::abs(totalDy) > std::abs(totalDx) * 1.5f;
-            if (isStronglyVertical) {
-                isDismissing_ = true;
-                dismissStartY_ = mouseDownY_;
-            }
-            // else: default pan (handled below), may transition to dismiss at boundary
+            // Zoomed in: always start as pan, dismiss only triggers at pan boundary
         }
     }
 
