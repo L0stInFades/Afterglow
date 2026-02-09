@@ -59,6 +59,9 @@ public:
 
     float GetScrollY() const { return scrollY_.GetValue(); }
 
+    // Skip rendering a specific cell (for viewer: image is "lifted" from gallery)
+    void SetSkipIndex(std::optional<size_t> index) { skipIndex_ = index; }
+
 private:
     // Section: a group of images with a header (e.g. "2024年12月")
     struct Section {
@@ -135,6 +138,9 @@ private:
     // Mouse hover
     float hoverX_ = -1.0f;
     float hoverY_ = -1.0f;
+
+    // Skip rendering this cell index (image is "lifted" into viewer)
+    std::optional<size_t> skipIndex_;
 
     bool resourcesCreated_ = false;
     void EnsureResources(Rendering::Direct2DRenderer* renderer);

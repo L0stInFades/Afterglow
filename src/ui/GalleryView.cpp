@@ -310,6 +310,9 @@ void GalleryView::Render(Rendering::Direct2DRenderer* renderer)
                 ctx->FillRectangle(cellRect, cellBrush_.Get());
             }
 
+            // Skip the cell that's currently "lifted" into the viewer
+            if (skipIndex_.has_value() && globalIndex == skipIndex_.value()) continue;
+
             // Thumbnail
             auto thumbnail = pipeline_ ? pipeline_->GetThumbnail(images_[globalIndex]) : nullptr;
             if (thumbnail) {

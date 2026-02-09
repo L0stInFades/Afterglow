@@ -40,10 +40,12 @@ void ViewManager::Initialize(Rendering::Direct2DRenderer* renderer,
             state_ = ViewState::Transition;
             transition_.StartViewerToGallery(bitmap, fromRect, toRect, bgAlpha, [this]() {
                 state_ = ViewState::Gallery;
+                galleryView_.SetSkipIndex(std::nullopt);  // Image "landed" back
                 needsRender_ = true;
             });
         } else {
             state_ = ViewState::Gallery;
+            galleryView_.SetSkipIndex(std::nullopt);
         }
         needsRender_ = true;
     });
@@ -93,6 +95,7 @@ void ViewManager::Update(float deltaTime)
 
         case ViewState::Viewer:
             imageViewer_.Update(deltaTime);
+            galleryView_.SetSkipIndex(imageViewer_.GetCurrentIndex());
             needsRender_ = true;
             break;
 
@@ -110,7 +113,8 @@ void ViewManager::TransitionToViewer(size_t imageIndex, D2D1_RECT_F fromRect)
     auto& images = galleryView_.GetImages();
     if (imageIndex >= images.size()) return;
 
-    // Set up viewer
+    // Set up viewer — "lift" the thumbnail from gallery
+    galleryView_.SetSkipIndex(imageIndex);
     imageViewer_.SetImages(images, imageIndex);
     imageViewer_.SetViewSize(viewWidth_, viewHeight_);
 
@@ -158,10 +162,12 @@ void ViewManager::TransitionToGallery()
 
         transition_.StartViewerToGallery(bitmap, fromRect, toRect, 1.0f, [this]() {
             state_ = ViewState::Gallery;
+            galleryView_.SetSkipIndex(std::nullopt);
             needsRender_ = true;
         });
     } else {
         state_ = ViewState::Gallery;
+        galleryView_.SetSkipIndex(std::nullopt);
     }
 
     needsRender_ = true;
