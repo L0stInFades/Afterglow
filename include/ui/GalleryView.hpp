@@ -7,6 +7,7 @@
 #include <vector>
 #include <filesystem>
 #include <optional>
+#include <functional>
 #include "../animation/SpringAnimation.hpp"
 #include "../animation/AnimationEngine.hpp"
 #include "../rendering/Direct2DRenderer.hpp"
@@ -76,9 +77,19 @@ public:
     // Skip rendering a specific cell (for viewer: image is "lifted" from gallery)
     void SetSkipIndex(std::optional<size_t> index) { skipIndex_ = index; }
 
+    // Manual open mode (Ctrl+O / drag-drop)
+    void SetManualOpenMode(bool enabled);
+    void SetBackToLibraryCallback(std::function<void()> cb);
+
     // Current tab
     GalleryTab GetActiveTab() const { return activeTab_; }
     bool IsInFolderDetail() const { return inFolderDetail_; }
+
+    // Edit mode (iOS jiggle management)
+    bool IsInEditMode() const { return editMode_; }
+    void SetEditMode(bool enabled);
+    void SetDeleteAlbumCallback(std::function<void(const std::filesystem::path&)> cb);
+    void SetAddAlbumCallback(std::function<void()> cb);
 
     // Public types needed by rendering helpers
     struct Section {
@@ -241,6 +252,10 @@ private:
     Microsoft::WRL::ComPtr<IDWriteTextFormat> backButtonFormat_;
     Microsoft::WRL::ComPtr<IDWriteFactory> dwFactory_;  // Cached for per-frame text layout
 
+    // Manual open mode (Ctrl+O / drag-drop replaces gallery)
+    bool manualOpenMode_ = false;
+    std::function<void()> backToLibraryCallback_;
+
     // Fast-scroll detection
     float scrollVelocitySmoothed_ = 0.0f;
     bool isFastScrolling_ = false;
@@ -251,6 +266,27 @@ private:
 
     // Skip rendering this cell index (image is "lifted" into viewer)
     std::optional<size_t> skipIndex_;
+
+    // Edit mode (iOS jiggle management)
+    bool editMode_ = false;
+    float editModeTime_ = 0.0f;
+    std::vector<float> jigglePhases_;
+    Animation::SpringAnimation editBadgeScale_;  // 0↔1 for badge pop-in/out
+    int deletingCardIndex_ = -1;
+    Animation::SpringAnimation deleteCardScale_; // 1→0 for card shrink
+    std::function<void(const std::filesystem::path&)> deleteAlbumCallback_;
+    std::function<void()> addAlbumCallback_;
+
+    void RenderGlassEditButton(ID2D1DeviceContext* ctx, ID2D1Bitmap* contentBitmap);
+    void RenderDeleteBadge(ID2D1DeviceContext* ctx, float cx, float cy, float scale);
+    void RenderAddCard(ID2D1DeviceContext* ctx, float x, float y, float w, float h, float cornerRadius);
+
+    // Edit mode D2D resources
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> editBadgeBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> editBadgeIconBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> addCardBorderBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> addCardIconBrush_;
+    Microsoft::WRL::ComPtr<IDWriteTextFormat> editButtonFormat_;
 
     bool resourcesCreated_ = false;
     void EnsureResources(Rendering::Direct2DRenderer* renderer);

@@ -1022,6 +1022,10 @@ void ImagePipeline::SavePersistentThumbs(const std::filesystem::path& cachePath)
     // Atomically replace old cache file
     MoveFileExW(tmpPath.c_str(), cachePath.c_str(), MOVEFILE_REPLACE_EXISTING);
 
+    // Reload the new file so persistIndex_ stays populated for the rest of the session.
+    // Without this, thumbnails evicted from GPU LRU require full JPEG decode again.
+    LoadPersistentThumbs(cachePath);
+
     OutputDebugStringA(("Saved persistent thumb cache: " +
         std::to_string(totalEntries) + " entries\n").c_str());
 }

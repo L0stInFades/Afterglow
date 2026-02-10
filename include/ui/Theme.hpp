@@ -62,6 +62,20 @@ namespace Theme {
     constexpr float AlbumMaxCardWidth = 220.0f;
     constexpr float AlbumTextHeight = 48.0f;
 
+    // Album edit mode (iOS jiggle)
+    constexpr float JiggleAmplitudeDeg = 1.5f;       // rotation degrees
+    constexpr float JiggleFrequencyHz  = 5.0f;       // oscillation speed
+    constexpr float EditBadgeRadius    = 12.0f;       // delete badge circle radius
+    constexpr float EditBadgeOffset    = 6.0f;        // inset from card top-left
+    constexpr D2D1_COLOR_F EditBadgeColor     = {0.92f, 0.26f, 0.27f, 1.0f};  // iOS red
+    constexpr D2D1_COLOR_F EditBadgeIconColor = {1.0f, 1.0f, 1.0f, 1.0f};
+    constexpr D2D1_COLOR_F AddCardBorderColor = {1.0f, 1.0f, 1.0f, 0.25f};
+    constexpr D2D1_COLOR_F AddCardIconColor   = {1.0f, 1.0f, 1.0f, 0.5f};
+    constexpr float EditBadgeStiffness  = 600.0f;    // bouncy pop-in
+    constexpr float EditBadgeDamping    = 25.0f;
+    constexpr float DeleteShrinkStiffness = 400.0f;  // clean collapse
+    constexpr float DeleteShrinkDamping   = 30.0f;
+
     // Animation configs (stiffness, damping, mass, restThreshold)
     // Snappy for transitions
     constexpr float TransitionStiffness = 300.0f;

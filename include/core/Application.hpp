@@ -84,9 +84,16 @@ private:
 
     // Album folders
     void AddAlbumFolder();
+    void RemoveAlbumFolder(const std::filesystem::path& albumPath);
     void LoadAlbumFolders();
     void SaveAlbumFolders();
     std::filesystem::path GetAlbumFilePath() const;
+
+    // Hidden albums (user-deleted, persists across rescans)
+    void LoadHiddenAlbums();
+    void SaveHiddenAlbums();
+    void FilterHiddenAlbums(std::vector<ScannedImage>& images) const;
+    std::filesystem::path GetHiddenAlbumsPath() const;
 
     // Recent files
     void LoadRecents();
@@ -120,8 +127,11 @@ private:
     // Current image list
     std::vector<std::filesystem::path> currentImages_;
 
-    // Album folders (user-specified)
+    // Album folders (user-specified scan sources)
     std::vector<std::filesystem::path> albumFolders_;
+
+    // Hidden album folder paths (user-deleted albums, persist across rescans)
+    std::vector<std::filesystem::path> hiddenAlbumPaths_;
 
     // Recent files
     std::vector<std::filesystem::path> recentItems_;
@@ -151,6 +161,10 @@ private:
 
     void StartFullScan();
     void CheckScanProgress();
+    void RestoreScanGallery();
+
+    // Manual open state (Ctrl+O / drag-drop replaces gallery)
+    bool inManualOpen_ = false;
 
     // Scan cache persistence
     std::filesystem::path GetScanCachePath() const;
@@ -159,6 +173,7 @@ private:
 
     // Persistent thumbnail cache (background save)
     std::jthread thumbSaveThread_;
+    std::atomic<bool> thumbSaveDone_{true};
 };
 
 } // namespace Core

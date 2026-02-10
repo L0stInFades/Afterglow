@@ -192,7 +192,9 @@ void ViewManager::OnKeyDown(UINT key)
 {
     switch (state_) {
         case ViewState::Gallery:
-            // Ctrl+O is handled by Application
+            if (key == VK_ESCAPE && galleryView_.IsInEditMode()) {
+                galleryView_.SetEditMode(false);
+            }
             break;
         case ViewState::Viewer:
             imageViewer_.OnKeyDown(key);

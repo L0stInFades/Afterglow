@@ -13,6 +13,7 @@
 #include <knownfolders.h>
 #include <fstream>
 #include <set>
+#include <unordered_set>
 #include <wrl/client.h>
 
 #pragma comment(lib, "shcore.lib")
@@ -143,6 +144,7 @@ int Application::Run(int nCmdShow)
     // Auto-scan: merge album folders + system defaults, progressive display
     if (currentImages_.empty()) {
         LoadAlbumFolders();
+        LoadHiddenAlbums();
 
         // Load persistent thumbnail cache (memory-mapped for instant pixel access)
         if (pipeline_) {
@@ -153,11 +155,13 @@ int Application::Run(int nCmdShow)
         // Load cached scan results for instant display
         auto cached = LoadScanCache();
         if (!cached.empty()) {
-            DebugLog(("Loaded " + std::to_string(cached.size()) + " cached images").c_str());
+            FilterHiddenAlbums(cached);
+            DebugLog(("Loaded " + std::to_string(cached.size()) + " cached images (filtered)").c_str());
             if (viewManager_) {
                 viewManager_->GetGalleryView()->SetImagesGrouped(cached);
             }
             currentImages_.clear();
+            currentImages_.reserve(cached.size());
             for (const auto& img : cached) {
                 currentImages_.push_back(img.path);
             }
@@ -292,14 +296,18 @@ void Application::StartFullScan()
                 std::lock_guard lock(scanMutex_);
                 scannedResults_ = std::move(results);
             }
+            // Set isScanning_ BEFORE scanDirty_ to avoid race:
+            // CheckScanProgress must see isScanning_==false when it consumes scanDirty_,
+            // otherwise the finalization (SaveScanCache, SetScanningState) is permanently skipped.
+            isScanning_ = false;
             scanDirty_ = true;
         } catch (const std::exception& e) {
             DebugLog(("Scan exception: " + std::string(e.what())).c_str());
+            isScanning_ = false;
         } catch (...) {
             DebugLog("Scan unknown exception");
+            isScanning_ = false;
         }
-
-        isScanning_ = false;
         CoUninitialize();
     });
 }
@@ -324,18 +332,35 @@ void Application::CheckScanProgress()
             results = scannedResults_;
         }
 
+        // Filter out user-hidden albums before display
+        FilterHiddenAlbums(results);
+
         // Only close scanning state when scan is actually finished
         if (!isScanning_) {
             gallery->SetScanningState(false, results.size());
-            SaveScanCache(results);  // Persist paths for next launch
+            SaveScanCache(results);  // Persist filtered paths for next launch
 
-            // Save persistent thumbnail cache in background thread
+            // Auto-clear manual open when scan completes (gallery is fully restored)
+            inManualOpen_ = false;
+            gallery->SetManualOpenMode(false);
+
+            // Save persistent thumbnail cache in background thread (non-blocking)
             if (pipeline_) {
                 auto thumbPath = GetScanCachePath().parent_path() / L"scan_thumbs.bin";
-                if (thumbSaveThread_.joinable()) thumbSaveThread_.join();
+                if (thumbSaveThread_.joinable()) {
+                    if (thumbSaveDone_.load()) {
+                        thumbSaveThread_.join();
+                    } else {
+                        // Previous save still running — skip this time; shutdown will join
+                        goto skipThumbSave;
+                    }
+                }
+                thumbSaveDone_ = false;
                 thumbSaveThread_ = std::jthread([this, thumbPath](std::stop_token) {
                     pipeline_->SavePersistentThumbs(thumbPath);
+                    thumbSaveDone_ = true;
                 });
+                skipThumbSave:;
             }
         }
 
@@ -442,6 +467,19 @@ bool Application::InitializeComponents()
     viewManager_->Initialize(renderer_.get(), animEngine_.get(), pipeline_.get());
     viewManager_->SetViewSize(static_cast<float>(windowWidth_) / dpiScale_,
                                static_cast<float>(windowHeight_) / dpiScale_);
+
+    // Wire up back-to-library callback for manual open mode
+    viewManager_->GetGalleryView()->SetBackToLibraryCallback([this]() {
+        RestoreScanGallery();
+    });
+
+    // Wire up album edit mode callbacks
+    viewManager_->GetGalleryView()->SetDeleteAlbumCallback([this](const auto& path) {
+        RemoveAlbumFolder(path);
+    });
+    viewManager_->GetGalleryView()->SetAddAlbumCallback([this]() {
+        AddAlbumFolder();
+    });
 
     LoadRecents();
 
@@ -637,6 +675,17 @@ void Application::OnKeyDown(UINT key)
         return;
     }
 
+    // Escape in gallery during manual open: restore full scan library
+    // (but not when edit mode is active — let edit mode exit first)
+    if (key == VK_ESCAPE && inManualOpen_) {
+        if (viewManager_ && viewManager_->GetState() == UI::ViewState::Gallery) {
+            if (!viewManager_->GetGalleryView()->IsInEditMode()) {
+                RestoreScanGallery();
+                return;
+            }
+        }
+    }
+
     if (viewManager_) {
         viewManager_->OnKeyDown(key);
     }
@@ -789,8 +838,45 @@ void Application::OpenImages(const std::vector<std::filesystem::path>& paths)
         }
     }
 
+    // Track manual open so user can return to scan gallery
+    inManualOpen_ = true;
+    if (viewManager_) {
+        viewManager_->GetGalleryView()->SetManualOpenMode(true);
+    }
+
     std::wstring title = windowTitle_ + L" - " + dir.filename().wstring();
     SetWindowTextW(hwnd_, title.c_str());
+
+    needsRender_ = true;
+}
+
+void Application::RestoreScanGallery()
+{
+    inManualOpen_ = false;
+    if (viewManager_) {
+        viewManager_->GetGalleryView()->SetManualOpenMode(false);
+    }
+
+    // Try to restore from cached scan results
+    std::vector<ScannedImage> results;
+    {
+        std::lock_guard lock(scanMutex_);
+        results = scannedResults_;
+    }
+
+    if (!results.empty() && viewManager_) {
+        viewManager_->GetGalleryView()->SetImagesGrouped(results);
+        currentImages_.clear();
+        for (const auto& img : results) {
+            currentImages_.push_back(img.path);
+        }
+        std::wstring title = windowTitle_ + L" - " +
+            std::to_wstring(results.size()) + L" photos";
+        SetWindowTextW(hwnd_, title.c_str());
+    } else {
+        // No cached results — start a fresh scan
+        StartFullScan();
+    }
 
     needsRender_ = true;
 }
@@ -1006,6 +1092,119 @@ void Application::AddAlbumFolder()
     StartFullScan();
 }
 
+void Application::RemoveAlbumFolder(const std::filesystem::path& albumPath)
+{
+    DebugLog(("RemoveAlbumFolder: " + albumPath.string()).c_str());
+
+    // --- 1. Add to persistent hidden list (survives rescans) ---
+    hiddenAlbumPaths_.push_back(albumPath);
+    SaveHiddenAlbums();
+
+    // --- 2. In-memory surgery: erase images whose parent == albumPath ---
+    std::wstring albumLower = albumPath.wstring();
+    std::transform(albumLower.begin(), albumLower.end(), albumLower.begin(), ::towlower);
+
+    std::vector<ScannedImage> results;
+    {
+        std::lock_guard lock(scanMutex_);
+        scannedResults_.erase(
+            std::remove_if(scannedResults_.begin(), scannedResults_.end(),
+                [&albumLower](const ScannedImage& img) {
+                    std::wstring p = img.path.parent_path().wstring();
+                    std::transform(p.begin(), p.end(), p.begin(), ::towlower);
+                    return p == albumLower;
+                }),
+            scannedResults_.end());
+        results = scannedResults_;
+    }
+
+    // --- 3. Push pruned data to gallery (rebuilds Photos + Albums) ---
+    if (viewManager_)
+        viewManager_->GetGalleryView()->SetImagesGrouped(results);
+
+    // --- 4. Update flat image list ---
+    currentImages_.clear();
+    currentImages_.reserve(results.size());
+    for (const auto& img : results)
+        currentImages_.push_back(img.path);
+
+    SetWindowTextW(hwnd_, (windowTitle_ + L" - " +
+        std::to_wstring(results.size()) + L" photos").c_str());
+
+    // --- 5. Persist pruned scan cache ---
+    SaveScanCache(results);
+
+    needsRender_ = true;
+}
+
+
+// --- Hidden albums persistence (user-deleted albums survive rescans) ---
+
+std::filesystem::path Application::GetHiddenAlbumsPath() const
+{
+    PWSTR outPath = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &outPath))) {
+        return {};
+    }
+    std::filesystem::path base(outPath);
+    CoTaskMemFree(outPath);
+    return base / L"UltraImageViewer" / L"hidden_albums.txt";
+}
+
+void Application::LoadHiddenAlbums()
+{
+    hiddenAlbumPaths_.clear();
+    auto filePath = GetHiddenAlbumsPath();
+    if (filePath.empty()) return;
+
+    std::wifstream in(filePath);
+    if (!in.is_open()) return;
+
+    std::wstring line;
+    while (std::getline(in, line)) {
+        if (!line.empty()) {
+            hiddenAlbumPaths_.emplace_back(line);
+        }
+    }
+
+    DebugLog(("Loaded " + std::to_string(hiddenAlbumPaths_.size()) + " hidden albums").c_str());
+}
+
+void Application::SaveHiddenAlbums()
+{
+    auto filePath = GetHiddenAlbumsPath();
+    if (filePath.empty()) return;
+
+    std::filesystem::create_directories(filePath.parent_path());
+    std::wofstream out(filePath, std::ios::trunc);
+    for (const auto& p : hiddenAlbumPaths_) {
+        out << p.wstring() << L"\n";
+    }
+}
+
+void Application::FilterHiddenAlbums(std::vector<ScannedImage>& images) const
+{
+    if (hiddenAlbumPaths_.empty()) return;
+
+    // Build O(1) lookup set of lowered hidden folder paths
+    std::unordered_set<std::wstring> hidden;
+    hidden.reserve(hiddenAlbumPaths_.size());
+    for (const auto& p : hiddenAlbumPaths_) {
+        std::wstring low = p.wstring();
+        std::transform(low.begin(), low.end(), low.begin(), ::towlower);
+        hidden.insert(std::move(low));
+    }
+
+    // Erase images whose parent folder is in the hidden set
+    images.erase(
+        std::remove_if(images.begin(), images.end(),
+            [&hidden](const ScannedImage& img) {
+                std::wstring parent = img.path.parent_path().wstring();
+                std::transform(parent.begin(), parent.end(), parent.begin(), ::towlower);
+                return hidden.contains(parent);
+            }),
+        images.end());
+}
 
 // --- Scan cache persistence (binary format) ---
 

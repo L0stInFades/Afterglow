@@ -63,6 +63,8 @@ GalleryView::GalleryView()
     , folderDetailScrollY_(Animation::SpringConfig{Theme::ScrollStiffness, Theme::ScrollDamping, 1.0f, 0.5f})
     , folderSlide_(Animation::SpringConfig{Theme::NavigationStiffness, Theme::NavigationDamping, 1.0f, 0.005f})
     , tabSlide_(Animation::SpringConfig{Theme::NavigationStiffness, Theme::NavigationDamping, 1.0f, 0.005f})
+    , editBadgeScale_(Animation::SpringConfig{Theme::EditBadgeStiffness, Theme::EditBadgeDamping, 1.0f, 0.01f})
+    , deleteCardScale_(Animation::SpringConfig{Theme::DeleteShrinkStiffness, Theme::DeleteShrinkDamping, 1.0f, 0.01f})
 {
     scrollY_.SetValue(0.0f);
     scrollY_.SetTarget(0.0f);
@@ -83,6 +85,14 @@ GalleryView::GalleryView()
     tabSlide_.SetValue(0.0f);
     tabSlide_.SetTarget(0.0f);
     tabSlide_.SnapToTarget();
+
+    editBadgeScale_.SetValue(0.0f);
+    editBadgeScale_.SetTarget(0.0f);
+    editBadgeScale_.SnapToTarget();
+
+    deleteCardScale_.SetValue(1.0f);
+    deleteCardScale_.SetTarget(1.0f);
+    deleteCardScale_.SnapToTarget();
 }
 
 GalleryView::~GalleryView() = default;
@@ -147,6 +157,18 @@ void GalleryView::SetImagesGrouped(const std::vector<Core::ScannedImage>& scanne
 
     allScannedImages_ = scannedImages;
     BuildFolderAlbums(scannedImages);
+
+    // Edit mode resilience: re-init jiggle phases for new album count
+    if (editMode_) {
+        jigglePhases_.resize(folderAlbums_.size() + 1);
+        for (auto& phase : jigglePhases_) {
+            phase = static_cast<float>(rand()) / static_cast<float>(RAND_MAX) * 6.2831853f;
+        }
+        deletingCardIndex_ = -1;
+        deleteCardScale_.SetValue(1.0f);
+        deleteCardScale_.SetTarget(1.0f);
+        deleteCardScale_.SnapToTarget();
+    }
 }
 
 void GalleryView::SetImages(const std::vector<std::filesystem::path>& paths)
@@ -181,6 +203,50 @@ void GalleryView::SetScanningState(bool scanning, size_t count)
 {
     isScanning_ = scanning;
     scanCount_ = count;
+}
+
+void GalleryView::SetManualOpenMode(bool enabled)
+{
+    manualOpenMode_ = enabled;
+}
+
+void GalleryView::SetBackToLibraryCallback(std::function<void()> cb)
+{
+    backToLibraryCallback_ = std::move(cb);
+}
+
+void GalleryView::SetDeleteAlbumCallback(std::function<void(const std::filesystem::path&)> cb)
+{
+    deleteAlbumCallback_ = std::move(cb);
+}
+
+void GalleryView::SetAddAlbumCallback(std::function<void()> cb)
+{
+    addAlbumCallback_ = std::move(cb);
+}
+
+void GalleryView::SetEditMode(bool enabled)
+{
+    if (editMode_ == enabled) return;
+    editMode_ = enabled;
+
+    if (enabled) {
+        // Generate random jiggle phases (one per album + 1 for add card)
+        jigglePhases_.resize(folderAlbums_.size() + 1);
+        for (auto& phase : jigglePhases_) {
+            phase = static_cast<float>(rand()) / static_cast<float>(RAND_MAX) * 6.2831853f;
+        }
+        editModeTime_ = 0.0f;
+        editBadgeScale_.SetValue(0.0f);
+        editBadgeScale_.SetTarget(1.0f);
+        deleteCardScale_.SetValue(1.0f);
+        deleteCardScale_.SetTarget(1.0f);
+        deleteCardScale_.SnapToTarget();
+        deletingCardIndex_ = -1;
+    } else {
+        editBadgeScale_.SetTarget(0.0f);
+        deletingCardIndex_ = -1;
+    }
 }
 
 void GalleryView::BuildFolderAlbums(const std::vector<Core::ScannedImage>& scannedImages)
@@ -341,6 +407,18 @@ void GalleryView::EnsureResources(Rendering::Direct2DRenderer* renderer)
     if (backButtonFormat_) {
         backButtonFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
         backButtonFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    }
+
+    // Edit mode brushes
+    editBadgeBrush_ = renderer->CreateBrush(Theme::EditBadgeColor);
+    editBadgeIconBrush_ = renderer->CreateBrush(Theme::EditBadgeIconColor);
+    addCardBorderBrush_ = renderer->CreateBrush(Theme::AddCardBorderColor);
+    addCardIconBrush_ = renderer->CreateBrush(Theme::AddCardIconColor);
+
+    editButtonFormat_ = renderer->CreateTextFormat(L"Segoe UI", 14.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    if (editButtonFormat_) {
+        editButtonFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        editButtonFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     }
 
     // Cache DWrite factory (avoid per-frame COM allocation)
@@ -535,6 +613,15 @@ void GalleryView::Render(Rendering::Direct2DRenderer* renderer)
         // Glass back button in folder detail
         if (activeTab_ == GalleryTab::Albums && inFolderDetail_ && !folderTransitionActive_) {
             RenderGlassBackButton(ctx, offscreenBitmap_.Get());
+        }
+        // Glass back button for manual open mode (any tab, not in folder detail)
+        if (manualOpenMode_ && !inFolderDetail_) {
+            RenderGlassBackButton(ctx, offscreenBitmap_.Get());
+        }
+
+        // Glass edit button on Albums tab (not in folder detail)
+        if (activeTab_ == GalleryTab::Albums && !inFolderDetail_ && !folderTransitionActive_) {
+            RenderGlassEditButton(ctx, offscreenBitmap_.Get());
         }
     }
 }
@@ -832,6 +919,19 @@ void GalleryView::RenderAlbumsTab(Rendering::Direct2DRenderer* renderer,
     float glassOverlap = Theme::GlassTabBarHeight + Theme::GlassTabBarMargin * 2;
     albumsMaxScroll_ = std::max(0.0f, totalHeight - contentHeight + glassOverlap);
 
+    // Check if we have active jiggle (edit mode or animating out)
+    bool hasJiggle = !jigglePhases_.empty();
+    float badgeScale = editBadgeScale_.GetValue();
+    constexpr float PI2 = 6.2831853f;
+
+    // Account for add card in total height calculation
+    if (editMode_) {
+        size_t totalCards = folderAlbums_.size() + 1;  // +1 for add card
+        int numRowsWithAdd = static_cast<int>((totalCards + ag.columns - 1) / ag.columns);
+        float totalHeightWithAdd = startY + numRowsWithAdd * (ag.cardTotalHeight + ag.gap) + ag.paddingX;
+        albumsMaxScroll_ = std::max(0.0f, totalHeightWithAdd - contentHeight + glassOverlap);
+    }
+
     for (size_t i = 0; i < folderAlbums_.size(); ++i) {
         int col = static_cast<int>(i) % ag.columns;
         int row = static_cast<int>(i) / ag.columns;
@@ -841,6 +941,35 @@ void GalleryView::RenderAlbumsTab(Rendering::Direct2DRenderer* renderer,
 
         if (cardY + ag.cardTotalHeight < 0.0f) continue;
         if (cardY > contentHeight) break;
+
+        // Card center for transform
+        float centerX = cardX + ag.cardWidth * 0.5f;
+        float centerY = cardY + ag.cardTotalHeight * 0.5f;
+
+        // Compute scale for deleting card
+        float cardScale = (static_cast<int>(i) == deletingCardIndex_) ? deleteCardScale_.GetValue() : 1.0f;
+        if (cardScale < 0.01f) continue;  // Skip fully shrunk cards
+
+        // Save transform, apply jiggle + scale
+        D2D1_MATRIX_3X2_F savedTransform;
+        ctx->GetTransform(&savedTransform);
+
+        if (hasJiggle && i < jigglePhases_.size()) {
+            float angle = Theme::JiggleAmplitudeDeg *
+                std::sin(PI2 * Theme::JiggleFrequencyHz * editModeTime_ + jigglePhases_[i]);
+            auto transform = D2D1::Matrix3x2F::Translation(-centerX, -centerY) *
+                D2D1::Matrix3x2F::Scale(cardScale, cardScale) *
+                D2D1::Matrix3x2F::Rotation(angle) *
+                D2D1::Matrix3x2F::Translation(centerX, centerY) *
+                savedTransform;
+            ctx->SetTransform(transform);
+        } else if (cardScale < 1.0f) {
+            auto transform = D2D1::Matrix3x2F::Translation(-centerX, -centerY) *
+                D2D1::Matrix3x2F::Scale(cardScale, cardScale) *
+                D2D1::Matrix3x2F::Translation(centerX, centerY) *
+                savedTransform;
+            ctx->SetTransform(transform);
+        }
 
         // Cover image (1:1, rounded)
         D2D1_RECT_F imgRect = D2D1::RectF(cardX, cardY,
@@ -862,8 +991,8 @@ void GalleryView::RenderAlbumsTab(Rendering::Direct2DRenderer* renderer,
             DrawBitmapRounded(ctx, factory, thumbnail.Get(), imgRect, cornerRadius, &srcRect);
         }
 
-        // Hover
-        if (hoverBrush_ &&
+        // Hover (only when not in edit mode)
+        if (!editMode_ && hoverBrush_ &&
             hoverX_ >= imgRect.left && hoverX_ <= imgRect.right &&
             hoverY_ >= imgRect.top && hoverY_ <= imgRect.bottom) {
             ctx->FillRoundedRectangle(roundedImg, hoverBrush_.Get());
@@ -888,6 +1017,45 @@ void GalleryView::RenderAlbumsTab(Rendering::Direct2DRenderer* renderer,
             std::wstring countStr = FormatNumber(folderAlbums_[i].imageCount);
             ctx->DrawText(countStr.c_str(), static_cast<UINT32>(countStr.size()),
                           albumCountFormat_.Get(), countRect, secondaryBrush_.Get());
+        }
+
+        // Delete badge (all albums in edit mode)
+        if (badgeScale > 0.01f) {
+            float badgeCx = cardX + Theme::EditBadgeOffset;
+            float badgeCy = cardY + Theme::EditBadgeOffset;
+            RenderDeleteBadge(ctx, badgeCx, badgeCy, badgeScale);
+        }
+
+        // Restore transform
+        ctx->SetTransform(savedTransform);
+    }
+
+    // Add card at end of grid (edit mode only)
+    if (editMode_) {
+        size_t addIdx = folderAlbums_.size();
+        int addCol = static_cast<int>(addIdx) % ag.columns;
+        int addRow = static_cast<int>(addIdx) / ag.columns;
+        float addX = ag.paddingX + addCol * (ag.cardWidth + ag.gap);
+        float addY = startY + addRow * (ag.cardTotalHeight + ag.gap) - scroll;
+
+        if (addY + ag.cardTotalHeight >= 0.0f && addY <= contentHeight) {
+            D2D1_MATRIX_3X2_F savedTransform;
+            ctx->GetTransform(&savedTransform);
+
+            if (hasJiggle && addIdx < jigglePhases_.size()) {
+                float angle = Theme::JiggleAmplitudeDeg *
+                    std::sin(PI2 * Theme::JiggleFrequencyHz * editModeTime_ + jigglePhases_[addIdx]);
+                float acx = addX + ag.cardWidth * 0.5f;
+                float acy = addY + ag.cardTotalHeight * 0.5f;
+                auto transform = D2D1::Matrix3x2F::Translation(-acx, -acy) *
+                    D2D1::Matrix3x2F::Rotation(angle) *
+                    D2D1::Matrix3x2F::Translation(acx, acy) *
+                    savedTransform;
+                ctx->SetTransform(transform);
+            }
+
+            RenderAddCard(ctx, addX, addY, ag.cardWidth, ag.imageHeight, cornerRadius);
+            ctx->SetTransform(savedTransform);
         }
     }
 
@@ -1317,8 +1485,8 @@ void GalleryView::RenderGlassBackButton(ID2D1DeviceContext* ctx, ID2D1Bitmap* co
 {
     if (!backButtonFormat_ || !dwFactory_) return;
 
-    // Measure text width for auto-sizing
-    const wchar_t* text = L"\u2039 \u76F8\u518C";
+    // Dynamic text: folder detail → "‹ 相册", manual open → "‹ 照片"
+    const wchar_t* text = (manualOpenMode_ && !inFolderDetail_) ? L"\u2039 \u7167\u7247" : L"\u2039 \u76F8\u518C";
     uint32_t textLen = 4;
     float maxW = 200.0f;
     float btnH = Theme::GlassBackBtnHeight;
@@ -1352,6 +1520,85 @@ void GalleryView::RenderGlassBackButton(ID2D1DeviceContext* ctx, ID2D1Bitmap* co
     }
 }
 
+void GalleryView::RenderGlassEditButton(ID2D1DeviceContext* ctx, ID2D1Bitmap* contentBitmap)
+{
+    if (!editButtonFormat_ || !dwFactory_) return;
+
+    const wchar_t* text = editMode_ ? L"\u5B8C\u6210" : L"\u7F16\u8F91";
+    uint32_t textLen = 2;
+    float maxW = 200.0f;
+    float btnH = Theme::GlassBackBtnHeight;
+
+    ComPtr<IDWriteTextLayout> layout;
+    HRESULT hr = dwFactory_->CreateTextLayout(text, textLen, editButtonFormat_.Get(),
+                                               maxW, btnH, &layout);
+    if (FAILED(hr) || !layout) return;
+
+    DWRITE_TEXT_METRICS metrics;
+    layout->GetMetrics(&metrics);
+
+    float btnW = metrics.width + Theme::GlassBackBtnPadding * 2.0f;
+    float btnR = btnH / 2.0f;
+    float btnX = viewWidth_ - Theme::GlassTabBarMargin - btnW;
+    float btnY = Theme::GlassTabBarMargin;
+
+    D2D1_ROUNDED_RECT btnPill = {
+        D2D1::RectF(btnX, btnY, btnX + btnW, btnY + btnH),
+        btnR, btnR
+    };
+
+    RenderGlassElement(ctx, contentBitmap, btnPill, glassTintBrush_.Get(), glassBorderBrush_.Get());
+
+    if (glassTabTextBrush_) {
+        D2D1_RECT_F textRect = D2D1::RectF(btnX, btnY, btnX + btnW, btnY + btnH);
+        ctx->DrawText(text, textLen, editButtonFormat_.Get(), textRect, glassTabTextBrush_.Get());
+    }
+}
+
+void GalleryView::RenderDeleteBadge(ID2D1DeviceContext* ctx, float cx, float cy, float scale)
+{
+    if (!editBadgeBrush_ || !editBadgeIconBrush_ || scale < 0.01f) return;
+
+    float r = Theme::EditBadgeRadius * scale;
+
+    // Red circle
+    D2D1_ELLIPSE badge = {D2D1::Point2F(cx, cy), r, r};
+    ctx->FillEllipse(badge, editBadgeBrush_.Get());
+
+    // White minus sign
+    float lineHalf = r * 0.5f;
+    float lineThickness = 2.0f * scale;
+    ctx->DrawLine(
+        D2D1::Point2F(cx - lineHalf, cy),
+        D2D1::Point2F(cx + lineHalf, cy),
+        editBadgeIconBrush_.Get(), lineThickness);
+}
+
+void GalleryView::RenderAddCard(ID2D1DeviceContext* ctx, float x, float y,
+                                 float w, float h, float cornerRadius)
+{
+    // Dashed border rounded rect
+    D2D1_RECT_F rect = D2D1::RectF(x, y, x + w, y + h);
+    D2D1_ROUNDED_RECT rr = {rect, cornerRadius, cornerRadius};
+
+    if (addCardBorderBrush_) {
+        ctx->DrawRoundedRectangle(rr, addCardBorderBrush_.Get(), 2.0f);
+    }
+
+    // Plus sign in center
+    if (addCardIconBrush_) {
+        float cx = x + w * 0.5f;
+        float cy = y + h * 0.5f;
+        float arm = 20.0f;
+        float thickness = 3.0f;
+
+        ctx->DrawLine(D2D1::Point2F(cx - arm, cy), D2D1::Point2F(cx + arm, cy),
+                      addCardIconBrush_.Get(), thickness);
+        ctx->DrawLine(D2D1::Point2F(cx, cy - arm), D2D1::Point2F(cx, cy + arm),
+                      addCardIconBrush_.Get(), thickness);
+    }
+}
+
 // ======================= UPDATE =======================
 
 void GalleryView::Update(float deltaTime)
@@ -1361,6 +1608,29 @@ void GalleryView::Update(float deltaTime)
     folderDetailScrollY_.Update(deltaTime);
     folderSlide_.Update(deltaTime);
     tabSlide_.Update(deltaTime);
+    editBadgeScale_.Update(deltaTime);
+    deleteCardScale_.Update(deltaTime);
+
+    // Edit mode time accumulator
+    if (editMode_ || !editBadgeScale_.IsFinished()) {
+        editModeTime_ += deltaTime;
+    }
+
+    // Delete card shrink completion
+    if (deletingCardIndex_ >= 0 && deleteCardScale_.IsFinished() &&
+        deleteCardScale_.GetValue() < 0.05f) {
+        size_t idx = static_cast<size_t>(deletingCardIndex_);
+        deletingCardIndex_ = -1;
+        if (idx < folderAlbums_.size() && deleteAlbumCallback_) {
+            deleteAlbumCallback_(folderAlbums_[idx].folderPath);
+        }
+    }
+
+    // Exiting edit mode: when badge scale finishes at ~0, clean up
+    if (!editMode_ && editBadgeScale_.IsFinished() &&
+        editBadgeScale_.GetValue() < 0.05f && !jigglePhases_.empty()) {
+        jigglePhases_.clear();
+    }
 
     // --- Fast-scroll detection ---
     {
@@ -1542,6 +1812,7 @@ void GalleryView::OnMouseUp(float x, float y)
             float halfWidth = barW / 2.0f;
             float relX = x - barLeft;
             if (relX < halfWidth) {
+                if (editMode_) SetEditMode(false);
                 activeTab_ = GalleryTab::Photos;
                 tabSlide_.SetTarget(0.0f);
                 if (inFolderDetail_) {
@@ -1551,6 +1822,7 @@ void GalleryView::OnMouseUp(float x, float y)
                     folderDetailSections_.clear();
                 }
             } else {
+                if (editMode_ && activeTab_ != GalleryTab::Albums) SetEditMode(false);
                 activeTab_ = GalleryTab::Albums;
                 tabSlide_.SetTarget(1.0f);
             }
@@ -1577,13 +1849,84 @@ void GalleryView::OnMouseUp(float x, float y)
             }
         }
 
-        // Album card click
+        // Glass back button for manual open mode (return to library)
+        if (manualOpenMode_ && !inFolderDetail_) {
+            float btnX = Theme::GlassTabBarMargin;
+            float btnY = Theme::GlassTabBarMargin;
+            float btnW = 100.0f;  // Generous hit area
+            float btnH = Theme::GlassBackBtnHeight;
+            if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) {
+                if (backToLibraryCallback_) backToLibraryCallback_();
+                consumedClick_ = true;
+                return;
+            }
+        }
+
+        // Glass edit button hit test (top-right pill, Albums tab only)
+        if (activeTab_ == GalleryTab::Albums && !inFolderDetail_) {
+            float ebtnH = Theme::GlassBackBtnHeight;
+            float ebtnW = 80.0f;  // Generous hit area
+            float ebtnX = viewWidth_ - Theme::GlassTabBarMargin - ebtnW;
+            float ebtnY = Theme::GlassTabBarMargin;
+            if (x >= ebtnX && x <= ebtnX + ebtnW && y >= ebtnY && y <= ebtnY + ebtnH) {
+                SetEditMode(!editMode_);
+                consumedClick_ = true;
+                return;
+            }
+        }
+
+        // Album card click / edit mode interactions
         if (activeTab_ == GalleryTab::Albums && !inFolderDetail_) {
             auto ag = CalculateAlbumGridLayout(viewWidth_);
             float scroll = albumsScrollY_.GetValue();
             float startY = Theme::GalleryHeaderHeight + Theme::GalleryPadding;
             float worldY = y + scroll;
 
+            if (editMode_) {
+                // Check add card hit
+                size_t addIdx = folderAlbums_.size();
+                int addCol = static_cast<int>(addIdx) % ag.columns;
+                int addRow = static_cast<int>(addIdx) / ag.columns;
+                float addCardX = ag.paddingX + addCol * (ag.cardWidth + ag.gap);
+                float addCardYPos = startY + addRow * (ag.cardTotalHeight + ag.gap);
+
+                if (x >= addCardX && x <= addCardX + ag.cardWidth &&
+                    worldY >= addCardYPos && worldY <= addCardYPos + ag.imageHeight) {
+                    if (addAlbumCallback_) addAlbumCallback_();
+                    consumedClick_ = true;
+                    return;
+                }
+
+                // Check delete badge hit on album cards
+                for (size_t i = 0; i < folderAlbums_.size(); ++i) {
+                    int col = static_cast<int>(i) % ag.columns;
+                    int row = static_cast<int>(i) / ag.columns;
+                    float cardX = ag.paddingX + col * (ag.cardWidth + ag.gap);
+                    float cardYPos = startY + row * (ag.cardTotalHeight + ag.gap);
+
+                    // Badge position (top-left of card)
+                    float badgeCx = cardX + Theme::EditBadgeOffset;
+                    float badgeCy = cardYPos - scroll + Theme::EditBadgeOffset;
+                    float hitRadius = Theme::EditBadgeRadius + 8.0f;  // Generous hit area
+
+                    float dx = x - badgeCx;
+                    float dy = y - badgeCy;
+                    if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+                        // Start delete animation
+                        deletingCardIndex_ = static_cast<int>(i);
+                        deleteCardScale_.SetValue(1.0f);
+                        deleteCardScale_.SetTarget(0.0f);
+                        consumedClick_ = true;
+                        return;
+                    }
+                }
+
+                // In edit mode, block folder detail opens
+                consumedClick_ = true;
+                return;
+            }
+
+            // Normal mode: enter folder detail
             for (size_t i = 0; i < folderAlbums_.size(); ++i) {
                 int col = static_cast<int>(i) % ag.columns;
                 int row = static_cast<int>(i) / ag.columns;

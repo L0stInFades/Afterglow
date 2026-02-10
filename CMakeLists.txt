@@ -82,12 +82,12 @@ set(SOURCES
 )
 
 # Create executable
-add_executable(ultra_image_viewer WIN32 ${SOURCES} app.rc)
+add_executable(afterglow WIN32 ${SOURCES} app.rc)
 
-target_include_directories(ultra_image_viewer PRIVATE include)
+target_include_directories(afterglow PRIVATE include)
 
 # Windows libraries
-target_link_libraries(ultra_image_viewer PRIVATE
+target_link_libraries(afterglow PRIVATE
     d2d1
     dcomp
     dxguid
@@ -110,21 +110,21 @@ target_link_libraries(ultra_image_viewer PRIVATE
 # Windows 11 manifests
 set(MANIFEST_FILE "${CMAKE_CURRENT_SOURCE_DIR}/assets/app.manifest")
 if(EXISTS ${MANIFEST_FILE})
-    target_sources(ultra_image_viewer PRIVATE ${MANIFEST_FILE})
-    set_target_properties(ultra_image_viewer PROPERTIES
+    target_sources(afterglow PRIVATE ${MANIFEST_FILE})
+    set_target_properties(afterglow PROPERTIES
         VS_DPI_AWARE "PerMonitor"
     )
 endif()
 
 # Installation
-install(TARGETS ultra_image_viewer
+install(TARGETS afterglow
     RUNTIME DESTINATION bin
 )
 
 # Summary
 message(STATUS "")
 message(STATUS "==========================================")
-message(STATUS "UltraImageViewer Configuration")
+message(STATUS "Afterglow Configuration")
 message(STATUS "==========================================")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
