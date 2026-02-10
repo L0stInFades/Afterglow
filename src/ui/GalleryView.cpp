@@ -395,6 +395,9 @@ void GalleryView::EnsureResources(Rendering::Direct2DRenderer* renderer)
     if (albumTitleFormat_) {
         albumTitleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
         albumTitleFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        albumTitleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        DWRITE_TRIMMING trimming = { DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0 };
+        albumTitleFormat_->SetTrimming(&trimming, nullptr);
     }
 
     albumCountFormat_ = renderer->CreateTextFormat(L"Segoe UI", 12.0f);
