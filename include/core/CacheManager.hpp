@@ -12,7 +12,6 @@
 #include <thread>
 #include <condition_variable>
 #include <mutex>
-#include <wrl/client.h>
 #include "ImageDecoder.hpp"
 
 namespace UltraImageViewer {
@@ -116,41 +115,6 @@ private:
     std::jthread prefetchThread_;
     std::condition_variable_any prefetchCV_;
     std::queue<std::filesystem::path> prefetchQueue_;
-};
-
-/**
- * Texture cache for GPU resources
- * Manages D3D12/Direct2D texture objects
- */
-class TextureCache {
-public:
-    struct TextureEntry {
-        Microsoft::WRL::ComPtr<IUnknown> texture; // ID3D12Resource or ID2D1Bitmap
-        size_t sizeBytes;
-        std::chrono::steady_clock::time_point lastUsed;
-    };
-
-    explicit TextureCache(size_t maxSizeBytes = 2ULL * 1024 * 1024 * 1024); // 2GB for GPU
-    ~TextureCache();
-
-    // Get texture from cache
-    template<typename T>
-    Microsoft::WRL::ComPtr<T> Get(const std::filesystem::path& path);
-
-    // Put texture in cache
-    void Put(const std::filesystem::path& path, IUnknown* texture, size_t sizeBytes);
-
-    // Clear cache
-    void Clear();
-
-    // Get cache size
-    size_t GetCurrentSize() const { return currentSizeBytes_; }
-
-private:
-    std::unordered_map<std::filesystem::path, TextureEntry> cache_;
-    size_t maxSizeBytes_;
-    size_t currentSizeBytes_ = 0;
-    mutable std::mutex mutex_;
 };
 
 } // namespace Core

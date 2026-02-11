@@ -59,26 +59,16 @@ set(SOURCES
     src/core/CacheManager.cpp
     src/core/ThreadPool.cpp
     src/core/ImagePipeline.cpp
-    src/rendering/D3D12Renderer.cpp
     src/rendering/Direct2DRenderer.cpp
-    src/rendering/TextureManager.cpp
-    src/rendering/MipMapGenerator.cpp
-    src/rendering/Viewport.cpp
-    src/ui/MainWindow.cpp
     src/ui/CommandPalette.cpp
     src/ui/GestureHandler.cpp
     src/ui/ThumbnailStrip.cpp
-    src/ui/MetadataPanel.cpp
     src/ui/ViewManager.cpp
     src/ui/GalleryView.cpp
     src/ui/ImageViewer.cpp
     src/ui/TransitionController.cpp
     src/animation/SpringAnimation.cpp
     src/animation/AnimationEngine.cpp
-    src/image_processing/ColorCorrection.cpp
-    src/image_processing/SharpenEngine.cpp
-    src/image_processing/BatchProcessor.cpp
-    src/image_processing/RAWDecoder.cpp
 )
 
 # Create executable
@@ -92,7 +82,6 @@ target_link_libraries(afterglow PRIVATE
     dcomp
     dxguid
     d3d11
-    d3d12
     dwrite
     dxgi
     windowscodecs
