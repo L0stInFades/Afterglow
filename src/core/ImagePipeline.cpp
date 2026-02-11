@@ -659,32 +659,46 @@ void ImagePipeline::ThumbnailDecodeTask(const std::filesystem::path& path,
         if (thumbnailCache_.contains(path)) return;
     }
 
+    // RAII guard for THREAD_MODE_BACKGROUND_BEGIN/END pairing.
+    // Ensures background mode is always exited, even on early return or exception.
+    struct BackgroundModeGuard {
+        bool active;
+        BackgroundModeGuard(bool enter) : active(enter) {
+            if (active) SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+        }
+        ~BackgroundModeGuard() {
+            if (active) SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
+        }
+    };
+
     // I/O priority: Low-priority (prefetch) tasks enter background mode,
     // reducing both I/O and memory priority so they don't compete with
     // visible thumbnail decodes for disk bandwidth.
     bool lowIoPriority = (ThreadPool::CurrentLane() == static_cast<int>(TaskPriority::Low));
-    if (lowIoPriority) {
-        SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
-    }
+    BackgroundModeGuard bgGuard(lowIoPriority);
 
     // Tier 2: check CPU-RAM compressed cache first (~0.3ms decompress vs ~5ms disk)
     std::unique_ptr<uint8_t[]> pixels;
     uint32_t imgWidth = 0, imgHeight = 0;
 
+    // Extract compressed data under lock, decompress outside lock
     {
-        std::lock_guard lock(cacheMutex_);
-        auto t2it = tier2Cache_.find(path);
-        if (t2it != tier2Cache_.end()) {
-            imgWidth = t2it->second.width;
-            imgHeight = t2it->second.height;
-            uint32_t rawSize = t2it->second.rawSize;
-            pixels = std::make_unique<uint8_t[]>(rawSize);
-            if (DecompressPixels(t2it->second.data.get(), t2it->second.compressedSize,
-                                 pixels.get(), rawSize)) {
-                // Hit — remove from Tier 2 (will be promoted back to Tier 1)
-                tier2Bytes_ -= t2it->second.compressedSize;
+        CompressedThumbnail t2copy;
+        {
+            std::lock_guard lock(cacheMutex_);
+            auto t2it = tier2Cache_.find(path);
+            if (t2it != tier2Cache_.end()) {
+                t2copy = std::move(t2it->second);
+                tier2Bytes_ -= t2copy.compressedSize;
                 tier2Cache_.erase(t2it);
-            } else {
+            }
+        }
+        if (t2copy.data) {
+            imgWidth = t2copy.width;
+            imgHeight = t2copy.height;
+            pixels = std::make_unique<uint8_t[]>(t2copy.rawSize);
+            if (!DecompressPixels(t2copy.data.get(), t2copy.compressedSize,
+                                  pixels.get(), t2copy.rawSize)) {
                 pixels.reset();
                 imgWidth = imgHeight = 0;
             }
@@ -706,28 +720,17 @@ void ImagePipeline::ThumbnailDecodeTask(const std::filesystem::path& path,
 
     // Fall back to JPEG decode if not in persistent cache
     if (!pixels) {
-        if (!decoder_) {
-            if (lowIoPriority) SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
-            return;
-        }
+        if (!decoder_) return;
 
         auto image = decoder_->GenerateThumbnail(path, targetSize);
         if (!image || !image->data) {
             image = decoder_->Decode(path, DecoderFlags::SIMD);
         }
-        if (!image || !image->data) {
-            if (lowIoPriority) SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
-            return;
-        }
+        if (!image || !image->data) return;
 
         pixels = std::move(image->data);
         imgWidth = image->info.width;
         imgHeight = image->info.height;
-    }
-
-    // End background I/O mode before pushing to ready queue
-    if (lowIoPriority) {
-        SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
     }
 
     // Check generation again after decode
@@ -751,20 +754,20 @@ void ImagePipeline::ThumbnailDecodeTask(const std::filesystem::path& path,
 bool ImagePipeline::CompressPixels(const uint8_t* src, uint32_t srcSize,
                                     std::unique_ptr<uint8_t[]>& outBuf, size_t& outSize)
 {
-    COMPRESSOR_HANDLE compressor = nullptr;
-    if (!CreateCompressor(COMPRESS_ALGORITHM_XPRESS_HUFF, nullptr, &compressor))
+    struct CompressorGuard {
+        COMPRESSOR_HANDLE h = nullptr;
+        ~CompressorGuard() { if (h) CloseCompressor(h); }
+    };
+    CompressorGuard cg;
+    if (!CreateCompressor(COMPRESS_ALGORITHM_XPRESS_HUFF, nullptr, &cg.h))
         return false;
 
     SIZE_T compressedSize = 0;
-    Compress(compressor, src, srcSize, nullptr, 0, &compressedSize);
-    if (compressedSize == 0) {
-        CloseCompressor(compressor);
-        return false;
-    }
+    Compress(cg.h, src, srcSize, nullptr, 0, &compressedSize);
+    if (compressedSize == 0) return false;
 
     outBuf = std::make_unique<uint8_t[]>(compressedSize);
-    BOOL ok = Compress(compressor, src, srcSize, outBuf.get(), compressedSize, &compressedSize);
-    CloseCompressor(compressor);
+    BOOL ok = Compress(cg.h, src, srcSize, outBuf.get(), compressedSize, &compressedSize);
 
     if (!ok) return false;
     outSize = static_cast<size_t>(compressedSize);
@@ -774,13 +777,16 @@ bool ImagePipeline::CompressPixels(const uint8_t* src, uint32_t srcSize,
 bool ImagePipeline::DecompressPixels(const uint8_t* src, size_t srcSize,
                                       uint8_t* dst, uint32_t dstSize)
 {
-    DECOMPRESSOR_HANDLE decompressor = nullptr;
-    if (!CreateDecompressor(COMPRESS_ALGORITHM_XPRESS_HUFF, nullptr, &decompressor))
+    struct DecompressorGuard {
+        DECOMPRESSOR_HANDLE h = nullptr;
+        ~DecompressorGuard() { if (h) CloseDecompressor(h); }
+    };
+    DecompressorGuard dg;
+    if (!CreateDecompressor(COMPRESS_ALGORITHM_XPRESS_HUFF, nullptr, &dg.h))
         return false;
 
     SIZE_T decompressedSize = 0;
-    BOOL ok = Decompress(decompressor, src, srcSize, dst, dstSize, &decompressedSize);
-    CloseDecompressor(decompressor);
+    BOOL ok = Decompress(dg.h, src, srcSize, dst, dstSize, &decompressedSize);
     return ok && decompressedSize == dstSize;
 }
 
@@ -826,8 +832,8 @@ void ImagePipeline::EvictThumbnailsIfNeeded()
     for (const auto& c : candidates) {
         if (thumbnailCacheBytes_ <= targetBytes) break;
 
-        // Try to demote to Tier 2 (if not already there and Tier 2 has space)
-        if (!tier2Cache_.contains(c.path) && tier2Bytes_ < kTier2MaxBytes) {
+        // Try to demote to Tier 2 (LRU eviction makes space if needed)
+        if (!tier2Cache_.contains(c.path)) {
             demoteList.push_back({c.path, c.width, c.height, c.bytes});
         }
 
@@ -853,12 +859,24 @@ void ImagePipeline::EvictThumbnailsIfNeeded()
             size_t compressedSize = 0;
 
             if (CompressPixels(saveIt->second.pixels.get(), rawSize, compressed, compressedSize)) {
+                // Evict oldest Tier 2 entry if over budget
+                if (tier2Bytes_ + compressedSize > kTier2MaxBytes && !tier2Cache_.empty()) {
+                    auto oldest = tier2Cache_.begin();
+                    for (auto it = tier2Cache_.begin(); it != tier2Cache_.end(); ++it) {
+                        if (it->second.lastAccess < oldest->second.lastAccess)
+                            oldest = it;
+                    }
+                    tier2Bytes_ -= oldest->second.compressedSize;
+                    tier2Cache_.erase(oldest);
+                }
+
                 CompressedThumbnail ct;
                 ct.data = std::move(compressed);
                 ct.compressedSize = compressedSize;
                 ct.rawSize = rawSize;
                 ct.width = static_cast<uint16_t>(d.width);
                 ct.height = static_cast<uint16_t>(d.height);
+                ct.lastAccess = std::chrono::steady_clock::now();
                 tier2Bytes_ += compressedSize;
                 tier2Cache_[d.path] = std::move(ct);
             }

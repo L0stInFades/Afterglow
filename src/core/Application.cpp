@@ -1417,13 +1417,13 @@ void Application::LoadFolderProfiles()
 
     // Header: "FPROF" + version(4) + count(4)
     char magic[6] = {};
-    fread(magic, 1, 5, f);
+    if (fread(magic, 1, 5, f) != 5) { fclose(f); return; }
     if (memcmp(magic, "FPROF", 5) != 0) { fclose(f); return; }
 
     uint32_t version = 0, count = 0;
-    fread(&version, 4, 1, f);
-    fread(&count, 4, 1, f);
+    if (fread(&version, 4, 1, f) != 1 || fread(&count, 4, 1, f) != 1) { fclose(f); return; }
     if (version != 1) { fclose(f); return; }
+    if (count > 100000) { fclose(f); return; }  // sanity: no more than 100k folders
 
     for (uint32_t i = 0; i < count; ++i) {
         uint16_t pathLen = 0;
@@ -1434,10 +1434,10 @@ void Application::LoadFolderProfiles()
 
         FolderProfile fp;
         fp.folder = std::filesystem::path(std::move(wpath));
-        fread(&fp.visitCount, 4, 1, f);
-        fread(&fp.thumbnailCount, 4, 1, f);
-        fread(&fp.totalDecodeTimeMs, 8, 1, f);
-        fread(&fp.lastVisitEpoch, 8, 1, f);
+        if (fread(&fp.visitCount, 4, 1, f) != 1 ||
+            fread(&fp.thumbnailCount, 4, 1, f) != 1 ||
+            fread(&fp.totalDecodeTimeMs, 8, 1, f) != 1 ||
+            fread(&fp.lastVisitEpoch, 8, 1, f) != 1) break;
         folderProfiles_.push_back(std::move(fp));
     }
 
@@ -1449,6 +1449,8 @@ void Application::SaveFolderProfiles()
 {
     auto path = GetFolderProfilePath();
     if (path.empty()) return;
+
+    std::lock_guard lock(scanMutex_);
 
     std::filesystem::create_directories(path.parent_path());
     FILE* f = _wfopen(path.c_str(), L"wb");
@@ -1476,6 +1478,8 @@ void Application::SaveFolderProfiles()
 
 void Application::RecordFolderVisit(const std::filesystem::path& folder)
 {
+    std::lock_guard lock(scanMutex_);
+
     auto now = std::chrono::system_clock::now();
     int64_t epoch = std::chrono::duration_cast<std::chrono::seconds>(
         now.time_since_epoch()).count();
@@ -1499,6 +1503,7 @@ void Application::RecordFolderVisit(const std::filesystem::path& folder)
 std::vector<std::filesystem::path> Application::GetPrioritizedFolders() const
 {
     // Sort by visit count descending, then by recency
+    std::lock_guard lock(scanMutex_);
     auto sorted = folderProfiles_;
     std::sort(sorted.begin(), sorted.end(),
         [](const FolderProfile& a, const FolderProfile& b) {

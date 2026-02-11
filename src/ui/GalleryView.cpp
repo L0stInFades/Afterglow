@@ -103,6 +103,7 @@ void GalleryView::Initialize(Rendering::Direct2DRenderer* renderer,
 {
     pipeline_ = pipeline;
     engine_ = engine;
+    QueryPerformanceFrequency(&framePerfFreq_);
     EnsureResources(renderer);
 }
 
@@ -563,7 +564,6 @@ void GalleryView::Render(Rendering::Direct2DRenderer* renderer)
 
     // Compute frame budget deadline for content rendering.
     // Content gets ContentBudgetMs; remaining time is reserved for glass overlays.
-    QueryPerformanceFrequency(&framePerfFreq_);
     QueryPerformanceCounter(&frameStart_);
     frameBudgetDeadline_.QuadPart = frameStart_.QuadPart +
         static_cast<LONGLONG>(Theme::ContentBudgetMs * 0.001 * framePerfFreq_.QuadPart);
@@ -905,7 +905,7 @@ void GalleryView::RenderPhotosTab(Rendering::Direct2DRenderer* renderer,
     }
 
     // Scroll indicator
-    if (maxScroll_ > 0.0f && !images_.empty()) {
+    if (maxScroll_ > 0.0f && cachedTotalHeight_ > 0.01f && !images_.empty()) {
         float scrollRatio = std::max(0.0f, std::min(1.0f, scroll / maxScroll_));
         float indicatorHeight = std::max(40.0f, contentHeight * (contentHeight / cachedTotalHeight_));
         float indicatorTop = scrollRatio * (contentHeight - indicatorHeight);
@@ -1149,7 +1149,7 @@ void GalleryView::RenderAlbumsTab(Rendering::Direct2DRenderer* renderer,
     }
 
     // Scroll indicator
-    if (albumsMaxScroll_ > 0.0f) {
+    if (albumsMaxScroll_ > 0.0f && totalHeight > 0.01f) {
         float scrollRatio = std::max(0.0f, std::min(1.0f, scroll / albumsMaxScroll_));
         float indicatorHeight = std::max(40.0f, contentHeight * (contentHeight / totalHeight));
         float indicatorTop = scrollRatio * (contentHeight - indicatorHeight);
@@ -1199,7 +1199,7 @@ void GalleryView::RenderFolderDetail(Rendering::Direct2DRenderer* renderer,
     // Header text moved to RenderGlassFolderHeader (Pass 2) for glass backing
 
     // Scroll indicator
-    if (folderDetailMaxScroll_ > 0.0f) {
+    if (folderDetailMaxScroll_ > 0.0f && folderDetailCachedTotalHeight_ > 0.01f) {
         float scrollRatio = std::max(0.0f, std::min(1.0f, scroll / folderDetailMaxScroll_));
         float indicatorHeight = std::max(40.0f, contentHeight * (contentHeight / folderDetailCachedTotalHeight_));
         float indicatorTop = scrollRatio * (contentHeight - indicatorHeight);
@@ -2090,6 +2090,9 @@ std::optional<GalleryView::HitResult> GalleryView::HitTest(float x, float y) con
 
 void GalleryView::SetViewSize(float width, float height)
 {
+    if (width != viewWidth_ || height != viewHeight_) {
+        cachedLayoutWidth_ = 0.0f;  // force layout recomputation next frame
+    }
     viewWidth_ = width;
     viewHeight_ = height;
 }

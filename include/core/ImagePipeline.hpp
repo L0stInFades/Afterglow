@@ -124,6 +124,7 @@ private:
         uint32_t rawSize = 0;  // uncompressed BGRA size
         uint16_t width = 0;
         uint16_t height = 0;
+        std::chrono::steady_clock::time_point lastAccess;
     };
     std::unordered_map<std::filesystem::path, CompressedThumbnail> tier2Cache_;
     size_t tier2Bytes_ = 0;  // total compressed bytes

@@ -155,7 +155,7 @@ private:
     std::atomic<size_t> scanProgress_{0};
     std::atomic<bool> isScanning_{false};
     std::atomic<bool> scanDirty_{false};
-    std::mutex scanMutex_;
+    mutable std::mutex scanMutex_;
     std::vector<ScannedImage> scannedResults_;
     size_t lastGalleryUpdateCount_ = 0;
 

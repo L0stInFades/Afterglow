@@ -49,7 +49,7 @@ void ThreadPool::Submit(std::function<void()> fn, TaskPriority p)
         std::lock_guard lock(mutex_);
         lanes_[static_cast<int>(p)].queue.push_back(std::move(fn));
     }
-    pending_.fetch_add(1, std::memory_order_relaxed);
+    pending_.fetch_add(1, std::memory_order_acq_rel);
     cv_.notify_one();
 }
 
@@ -59,7 +59,7 @@ void ThreadPool::SubmitFront(std::function<void()> fn, TaskPriority p)
         std::lock_guard lock(mutex_);
         lanes_[static_cast<int>(p)].queue.push_front(std::move(fn));
     }
-    pending_.fetch_add(1, std::memory_order_relaxed);
+    pending_.fetch_add(1, std::memory_order_acq_rel);
     cv_.notify_one();
 }
 
@@ -75,7 +75,7 @@ void ThreadPool::SubmitBatch(std::vector<std::function<void()>>& fns, TaskPriori
             q.push_back(std::move(fn));
         }
     }
-    pending_.fetch_add(count, std::memory_order_relaxed);
+    pending_.fetch_add(count, std::memory_order_acq_rel);
     cv_.notify_all();
 }
 
@@ -88,13 +88,13 @@ void ThreadPool::PurgeAll()
         lanes_[i].queue.clear();
     }
     // Adjust pending count (saturating subtract)
-    uint32_t old = pending_.load(std::memory_order_relaxed);
+    uint32_t old = pending_.load(std::memory_order_acquire);
     while (old > 0 && !pending_.compare_exchange_weak(old,
-           (old >= purged) ? old - purged : 0, std::memory_order_relaxed)) {}
+           (old >= purged) ? old - purged : 0, std::memory_order_acq_rel)) {}
 
     // Wake WaitIdle() if all work is done
-    if (pending_.load(std::memory_order_relaxed) == 0 &&
-        active_.load(std::memory_order_relaxed) == 0) {
+    if (pending_.load(std::memory_order_acquire) == 0 &&
+        active_.load(std::memory_order_acquire) == 0) {
         idleCV_.notify_all();
     }
 }
@@ -106,12 +106,12 @@ void ThreadPool::PurgePriority(TaskPriority p)
     uint32_t purged = static_cast<uint32_t>(q.size());
     q.clear();
 
-    uint32_t old = pending_.load(std::memory_order_relaxed);
+    uint32_t old = pending_.load(std::memory_order_acquire);
     while (old > 0 && !pending_.compare_exchange_weak(old,
-           (old >= purged) ? old - purged : 0, std::memory_order_relaxed)) {}
+           (old >= purged) ? old - purged : 0, std::memory_order_acq_rel)) {}
 
-    if (pending_.load(std::memory_order_relaxed) == 0 &&
-        active_.load(std::memory_order_relaxed) == 0) {
+    if (pending_.load(std::memory_order_acquire) == 0 &&
+        active_.load(std::memory_order_acquire) == 0) {
         idleCV_.notify_all();
     }
 }
@@ -120,8 +120,8 @@ void ThreadPool::WaitIdle()
 {
     std::unique_lock lock(mutex_);
     idleCV_.wait(lock, [this] {
-        return pending_.load(std::memory_order_relaxed) == 0 &&
-               active_.load(std::memory_order_relaxed) == 0;
+        return pending_.load(std::memory_order_acquire) == 0 &&
+               active_.load(std::memory_order_acquire) == 0;
     });
 }
 
@@ -154,25 +154,25 @@ void ThreadPool::WorkerFunc(uint32_t /*index*/)
     };
 
     auto executeTask = [this](DequeuedTask& task) {
-        pending_.fetch_sub(1, std::memory_order_relaxed);
-        active_.fetch_add(1, std::memory_order_relaxed);
+        pending_.fetch_sub(1, std::memory_order_acq_rel);
+        active_.fetch_add(1, std::memory_order_acq_rel);
 
         // Set OS thread priority based on task lane (unfair scheduling)
         int prio = kLanePriority[task.lane];
         bool changed = (prio != THREAD_PRIORITY_NORMAL);
         if (changed) SetThreadPriority(GetCurrentThread(), prio);
-
         tl_currentLane_ = task.lane;
-        task.fn();
-        tl_currentLane_ = -1;
 
+        try { task.fn(); } catch (...) { /* swallow — worker must not die */ }
+
+        tl_currentLane_ = -1;
         if (changed) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
 
-        active_.fetch_sub(1, std::memory_order_relaxed);
+        active_.fetch_sub(1, std::memory_order_acq_rel);
         completed_.fetch_add(1, std::memory_order_relaxed);
 
-        if (pending_.load(std::memory_order_relaxed) == 0 &&
-            active_.load(std::memory_order_relaxed) == 0) {
+        if (pending_.load(std::memory_order_acquire) == 0 &&
+            active_.load(std::memory_order_acquire) == 0) {
             idleCV_.notify_all();
         }
     };
