@@ -143,6 +143,7 @@ private:
                             ID2D1SolidColorBrush* borderBrush);
     void RenderGlassTabBar(ID2D1DeviceContext* ctx, ID2D1Bitmap* contentBitmap);
     void RenderGlassBackButton(ID2D1DeviceContext* ctx, ID2D1Bitmap* contentBitmap);
+    void RenderGlassFolderHeader(ID2D1DeviceContext* ctx, ID2D1Bitmap* contentBitmap);
     void EnsureOffscreenBitmap(Rendering::Direct2DRenderer* renderer);
     void EnsureGlassEffects(ID2D1DeviceContext* ctx);
     void GenerateDisplacementMap(ID2D1DeviceContext* ctx, float width, float height, float cornerRadius);

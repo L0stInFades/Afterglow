@@ -628,8 +628,9 @@ void GalleryView::Render(Rendering::Direct2DRenderer* renderer)
     if (offscreenBitmap_) {
         RenderGlassTabBar(ctx, offscreenBitmap_.Get());
 
-        // Glass back button in folder detail
+        // Glass folder header + back button in folder detail
         if (activeTab_ == GalleryTab::Albums && inFolderDetail_ && !folderTransitionActive_) {
+            RenderGlassFolderHeader(ctx, offscreenBitmap_.Get());
             RenderGlassBackButton(ctx, offscreenBitmap_.Get());
         }
         // Glass back button for manual open mode (any tab, not in folder detail)
@@ -1125,7 +1126,6 @@ void GalleryView::RenderFolderDetail(Rendering::Direct2DRenderer* renderer,
                                       ID2D1DeviceContext* ctx, float contentHeight)
 {
     if (openFolderIndex_ >= folderAlbums_.size()) return;
-    const auto& album = folderAlbums_[openFolderIndex_];
 
     auto grid = CalculateGridLayout(viewWidth_);
     ComputeFolderDetailSectionLayouts(grid);
@@ -1153,46 +1153,7 @@ void GalleryView::RenderFolderDetail(Rendering::Direct2DRenderer* renderer,
         pipeline_->SetVisibleRange(visiblePaths);
     }
 
-    // === Header overlay — no opaque background, so glass back button shows blurred content ===
-    // Folder title positioned below the glass back button zone
-    {
-        // Glass back button occupies: y=16 to y=48 (margin + height)
-        float titleY = Theme::GlassTabBarMargin + Theme::GlassBackBtnHeight + 8.0f;  // below glass pill
-
-        // Folder title — large bold
-        if (textBrush_ && titleFormat_) {
-            float titleH = 36.0f;
-            float titleMaxW = viewWidth_ - Theme::GalleryPadding * 2;
-            if (titleMaxW > 0 && dwFactory_) {
-                ComPtr<IDWriteTextLayout> layout;
-                HRESULT hr = dwFactory_->CreateTextLayout(
-                    album.displayName.c_str(),
-                    static_cast<UINT32>(album.displayName.size()),
-                    titleFormat_.Get(),
-                    titleMaxW, titleH, &layout);
-                if (SUCCEEDED(hr) && layout) {
-                    layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-                    ComPtr<IDWriteInlineObject> ellipsis;
-                    dwFactory_->CreateEllipsisTrimmingSign(titleFormat_.Get(), &ellipsis);
-                    DWRITE_TRIMMING trimming = { DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0 };
-                    layout->SetTrimming(&trimming, ellipsis.Get());
-                    ctx->DrawTextLayout(
-                        D2D1::Point2F(Theme::GalleryPadding, titleY),
-                        layout.Get(), textBrush_.Get());
-                }
-            }
-        }
-
-        // Subtitle: photo count
-        if (countFormat_ && secondaryBrush_) {
-            D2D1_RECT_F subtitleRect = D2D1::RectF(
-                Theme::GalleryPadding, titleY + 38.0f,
-                viewWidth_ - Theme::GalleryPadding, titleY + 54.0f);
-            std::wstring sub = FormatNumber(folderDetailImages_.size()) + L" photos";
-            ctx->DrawText(sub.c_str(), static_cast<UINT32>(sub.size()),
-                          countFormat_.Get(), subtitleRect, secondaryBrush_.Get());
-        }
-    }
+    // Header text moved to RenderGlassFolderHeader (Pass 2) for glass backing
 
     // Scroll indicator
     if (folderDetailMaxScroll_ > 0.0f) {
@@ -1540,6 +1501,64 @@ void GalleryView::RenderGlassBackButton(ID2D1DeviceContext* ctx, ID2D1Bitmap* co
             btnX + Theme::GlassBackBtnPadding, btnY,
             btnX + btnW - Theme::GlassBackBtnPadding, btnY + btnH);
         ctx->DrawText(text, textLen, backButtonFormat_.Get(), textRect, glassTabTextBrush_.Get());
+    }
+}
+
+void GalleryView::RenderGlassFolderHeader(ID2D1DeviceContext* ctx, ID2D1Bitmap* contentBitmap)
+{
+    if (!dwFactory_ || openFolderIndex_ >= folderAlbums_.size()) return;
+    const auto& album = folderAlbums_[openFolderIndex_];
+
+    float titleY = Theme::GlassTabBarMargin + Theme::GlassBackBtnHeight + 8.0f;
+    float headerBottom = titleY + 58.0f;
+
+    // Full-width glass header bar (covers title + subtitle zone)
+    D2D1_ROUNDED_RECT headerBar = {
+        D2D1::RectF(0, 0, viewWidth_, headerBottom),
+        0.0f, 0.0f
+    };
+    RenderGlassElement(ctx, contentBitmap, headerBar, glassTintBrush_.Get(), nullptr);
+
+    // Subtle bottom separator
+    if (glassBorderBrush_) {
+        ctx->DrawLine(
+            D2D1::Point2F(0, headerBottom),
+            D2D1::Point2F(viewWidth_, headerBottom),
+            glassBorderBrush_.Get(), 0.5f);
+    }
+
+    // Folder title — large bold
+    if (textBrush_ && titleFormat_) {
+        float titleH = 36.0f;
+        float titleMaxW = viewWidth_ - Theme::GalleryPadding * 2;
+        if (titleMaxW > 0) {
+            ComPtr<IDWriteTextLayout> layout;
+            HRESULT hr = dwFactory_->CreateTextLayout(
+                album.displayName.c_str(),
+                static_cast<UINT32>(album.displayName.size()),
+                titleFormat_.Get(),
+                titleMaxW, titleH, &layout);
+            if (SUCCEEDED(hr) && layout) {
+                layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                ComPtr<IDWriteInlineObject> ellipsis;
+                dwFactory_->CreateEllipsisTrimmingSign(titleFormat_.Get(), &ellipsis);
+                DWRITE_TRIMMING trimming = { DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0 };
+                layout->SetTrimming(&trimming, ellipsis.Get());
+                ctx->DrawTextLayout(
+                    D2D1::Point2F(Theme::GalleryPadding, titleY),
+                    layout.Get(), textBrush_.Get());
+            }
+        }
+    }
+
+    // Subtitle: photo count
+    if (countFormat_ && secondaryBrush_) {
+        D2D1_RECT_F subtitleRect = D2D1::RectF(
+            Theme::GalleryPadding, titleY + 38.0f,
+            viewWidth_ - Theme::GalleryPadding, titleY + 54.0f);
+        std::wstring sub = FormatNumber(folderDetailImages_.size()) + L" photos";
+        ctx->DrawText(sub.c_str(), static_cast<UINT32>(sub.size()),
+                      countFormat_.Get(), subtitleRect, secondaryBrush_.Get());
     }
 }
 

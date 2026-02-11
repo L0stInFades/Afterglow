@@ -7,7 +7,6 @@
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
-#include <queue>
 #include <deque>
 #include <condition_variable>
 #include <atomic>
@@ -17,6 +16,7 @@
 
 #include "ImageDecoder.hpp"
 #include "CacheManager.hpp"
+#include "ThreadPool.hpp"
 #include "../rendering/Direct2DRenderer.hpp"
 
 namespace UltraImageViewer {
@@ -107,11 +107,9 @@ private:
     Microsoft::WRL::ComPtr<ID2D1Bitmap> DecodeAndCreateBitmap(const std::filesystem::path& path);
     Microsoft::WRL::ComPtr<ID2D1Bitmap> DecodeAndCreateThumbnail(const std::filesystem::path& path, uint32_t maxSize);
 
-    // Background loading thread (legacy, for GetBitmapAsync)
-    void LoadThreadFunc();
-
-    // Async thumbnail decode worker thread function
-    void ThumbnailWorkerFunc();
+    // Single-task thumbnail decode (submitted to ThreadPool)
+    void ThumbnailDecodeTask(const std::filesystem::path& path,
+                             uint32_t targetSize, uint64_t generation);
 
     // LRU eviction for thumbnail cache
     void EvictThumbnailsIfNeeded();
@@ -119,6 +117,10 @@ private:
     ImageDecoder* decoder_ = nullptr;
     CacheManager* cache_ = nullptr;
     Rendering::Direct2DRenderer* renderer_ = nullptr;
+
+    // Unified thread pool (replaces all ad-hoc threads)
+    std::unique_ptr<ThreadPool> threadPool_;
+    std::atomic<bool> shutdownRequested_ = false;
 
     // Bitmap caches
     struct ThumbnailCacheEntry {
@@ -133,20 +135,6 @@ private:
     std::unordered_map<std::filesystem::path, Microsoft::WRL::ComPtr<ID2D1Bitmap>> fullImageCache_;
     mutable std::mutex cacheMutex_;
 
-    // Async loading (legacy)
-    struct LoadRequest {
-        std::filesystem::path path;
-        BitmapCallback callback;
-        bool isThumbnail = false;
-        uint32_t maxSize = 256;
-    };
-
-    std::jthread loadThread_;
-    std::mutex queueMutex_;
-    std::condition_variable queueCV_;
-    std::queue<LoadRequest> loadQueue_;
-    std::atomic<bool> shutdownRequested_ = false;
-
     // --- Async thumbnail pipeline ---
 
     // Decoded pixel buffer produced by worker threads (CPU-only, no D2D)
@@ -157,35 +145,19 @@ private:
         uint32_t height;
     };
 
-    // Priority request with generation counter for staleness detection
-    struct ThumbnailRequest {
-        std::filesystem::path path;
-        uint32_t targetSize;
-        uint64_t generation;    // stale requests are skipped
-        bool isVisible;         // visible items processed first
-    };
-
-    // Worker threads
-    std::vector<std::jthread> thumbnailWorkers_;
-
-    // Request deque (front = high priority visible, back = low priority)
-    std::deque<ThumbnailRequest> requestDeque_;
-    std::mutex requestMutex_;
-    std::condition_variable requestCV_;
-
-    // Ready queue: decoded pixel buffers waiting for GPU upload
-    std::vector<ReadyThumbnail> readyQueue_;
+    // Ready queue: decoded pixel buffers waiting for GPU upload (deque for O(1) pop_front)
+    std::deque<ReadyThumbnail> readyQueue_;
     mutable std::mutex readyMutex_;
 
     // Generation counter: incremented on InvalidateRequests()
     std::atomic<uint64_t> generation_{0};
 
     // Track which paths have pending requests to avoid duplicate queuing
-    std::unordered_map<std::filesystem::path, uint64_t> pendingRequests_;  // path -> generation
+    // Protected by cacheMutex_
+    std::unordered_map<std::filesystem::path, uint64_t> pendingRequests_;
 
-    // Currently visible paths (for prioritization)
+    // Currently visible paths (for prioritization). Protected by cacheMutex_
     std::unordered_map<std::filesystem::path, bool> visiblePaths_;
-    std::mutex visibleMutex_;
 
     // --- Persistent thumbnail cache (memory-mapped file) ---
     void ClosePersistentMapping();
