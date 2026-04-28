@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <thread>
 
 namespace UltraImageViewer {
@@ -11,12 +12,7 @@ namespace Core {
 ImageDecoder::ImageDecoder()
 {
     // Initialize WIC factory
-    HRESULT hr = CoCreateInstance(
-        CLSID_WICImagingFactory2,
-        nullptr,
-        CLSCTX_INPROC_SERVER,
-        IID_PPV_ARGS(&wicFactory_)
-    );
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory2, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory_));
 
     if (FAILED(hr)) {
         throw std::runtime_error("Failed to create WIC factory");
@@ -25,9 +21,7 @@ ImageDecoder::ImageDecoder()
 
 ImageDecoder::~ImageDecoder() = default;
 
-std::unique_ptr<DecodedImage> ImageDecoder::Decode(
-    const std::filesystem::path& filePath,
-    DecoderFlags flags)
+std::unique_ptr<DecodedImage> ImageDecoder::Decode(const std::filesystem::path& filePath, DecoderFlags flags)
 {
     if (!IsSupportedFormat(filePath)) {
         return nullptr;
@@ -44,10 +38,9 @@ std::unique_ptr<DecodedImage> ImageDecoder::Decode(
     return DecodeWithWIC(filePath, flags);
 }
 
-void ImageDecoder::DecodeAsync(
-    const std::filesystem::path& filePath,
-    std::function<void(std::unique_ptr<DecodedImage>)> callback,
-    DecoderFlags flags)
+void ImageDecoder::DecodeAsync(const std::filesystem::path& filePath,
+                               std::function<void(std::unique_ptr<DecodedImage>)> callback,
+                               DecoderFlags flags)
 {
     // Launch async decoding in background thread
     std::thread([this, filePath, callback, flags]() {
@@ -64,12 +57,7 @@ std::optional<ImageInfo> ImageDecoder::GetImageInfo(const std::filesystem::path&
 
     Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
     HRESULT hr = wicFactory_->CreateDecoderFromFilename(
-        filePath.c_str(),
-        nullptr,
-        GENERIC_READ,
-        WICDecodeMetadataCacheOnDemand,
-        &decoder
-    );
+        filePath.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
 
     if (FAILED(hr)) {
         return std::nullopt;
@@ -97,18 +85,11 @@ std::optional<ImageInfo> ImageDecoder::GetImageInfo(const std::filesystem::path&
     return info;
 }
 
-std::unique_ptr<DecodedImage> ImageDecoder::GenerateThumbnail(
-    const std::filesystem::path& filePath,
-    uint32_t maxSize)
+std::unique_ptr<DecodedImage> ImageDecoder::GenerateThumbnail(const std::filesystem::path& filePath, uint32_t maxSize)
 {
     Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
     HRESULT hr = wicFactory_->CreateDecoderFromFilename(
-        filePath.c_str(),
-        nullptr,
-        GENERIC_READ,
-        WICDecodeMetadataCacheOnDemand,
-        &decoder
-    );
+        filePath.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
 
     if (FAILED(hr)) {
         return nullptr;
@@ -138,25 +119,14 @@ std::unique_ptr<DecodedImage> ImageDecoder::GenerateThumbnail(
     Microsoft::WRL::ComPtr<IWICBitmapScaler> scaler;
     wicFactory_->CreateBitmapScaler(&scaler);
 
-    scaler->Initialize(
-        frame.Get(),
-        thumbWidth,
-        thumbHeight,
-        WICBitmapInterpolationModeFant
-    );
+    scaler->Initialize(frame.Get(), thumbWidth, thumbHeight, WICBitmapInterpolationModeFant);
 
     // Convert to 32-bit BGRA
     Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
     wicFactory_->CreateFormatConverter(&converter);
 
     converter->Initialize(
-        scaler.Get(),
-        GUID_WICPixelFormat32bppPBGRA,
-        WICBitmapDitherTypeNone,
-        nullptr,
-        0.0,
-        WICBitmapPaletteTypeCustom
-    );
+        scaler.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
 
     // Allocate buffer
     auto image = std::make_unique<DecodedImage>();
@@ -165,16 +135,14 @@ std::unique_ptr<DecodedImage> ImageDecoder::GenerateThumbnail(
     image->info.height = thumbHeight;
     image->info.pixelFormat = GUID_WICPixelFormat32bppPBGRA;
     image->info.bitsPerPixel = 32;
-    image->info.dataSize = thumbWidth * thumbHeight * 4;
+    image->info.dataSize = static_cast<size_t>(thumbWidth) * thumbHeight * 4;
+    if (image->info.dataSize > std::numeric_limits<UINT>::max()) {
+        return nullptr;
+    }
     image->data = std::make_unique<uint8_t[]>(image->info.dataSize);
 
     // Copy pixels
-    hr = converter->CopyPixels(
-        nullptr,
-        thumbWidth * 4,
-        image->info.dataSize,
-        image->data.get()
-    );
+    hr = converter->CopyPixels(nullptr, thumbWidth * 4, static_cast<UINT>(image->info.dataSize), image->data.get());
 
     if (FAILED(hr)) {
         return nullptr;
@@ -186,9 +154,7 @@ std::unique_ptr<DecodedImage> ImageDecoder::GenerateThumbnail(
 bool ImageDecoder::IsSupportedFormat(const std::filesystem::path& filePath)
 {
     static const std::vector<std::wstring> extensions = {
-        L".jpg", L".jpeg", L".png", L".bmp", L".gif",
-        L".tiff", L".tif", L".webp", L".ico", L".jxr"
-    };
+        L".jpg", L".jpeg", L".png", L".bmp", L".gif", L".tiff", L".tif", L".webp", L".ico", L".jxr"};
 
     std::wstring ext = filePath.extension().wstring();
     Simd::ToLowerInPlace(ext);
@@ -198,26 +164,16 @@ bool ImageDecoder::IsSupportedFormat(const std::filesystem::path& filePath)
 
 std::vector<std::wstring> ImageDecoder::GetSupportedExtensions()
 {
-    return {
-        L"*.jpg", L"*.jpeg", L"*.png", L"*.bmp", L"*.gif",
-        L"*.tiff", L"*.tif", L"*.webp", L"*.ico", L"*.jxr"
-    };
+    return {L"*.jpg", L"*.jpeg", L"*.png", L"*.bmp", L"*.gif", L"*.tiff", L"*.tif", L"*.webp", L"*.ico", L"*.jxr"};
 }
 
-std::unique_ptr<DecodedImage> ImageDecoder::DecodeWithWIC(
-    const std::filesystem::path& filePath,
-    DecoderFlags flags)
+std::unique_ptr<DecodedImage> ImageDecoder::DecodeWithWIC(const std::filesystem::path& filePath, DecoderFlags flags)
 {
     Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
     Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
 
     HRESULT hr = wicFactory_->CreateDecoderFromFilename(
-        filePath.c_str(),
-        nullptr,
-        GENERIC_READ,
-        WICDecodeMetadataCacheOnDemand,
-        &decoder
-    );
+        filePath.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
 
     if (FAILED(hr)) {
         return nullptr;
@@ -243,29 +199,24 @@ std::unique_ptr<DecodedImage> ImageDecoder::DecodeWithWIC(
     wicFactory_->CreateFormatConverter(&converter);
 
     hr = converter->Initialize(
-        frame.Get(),
-        targetFormat,
-        WICBitmapDitherTypeNone,
-        nullptr,
-        0.0,
-        WICBitmapPaletteTypeCustom
-    );
+        frame.Get(), targetFormat, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
 
     if (FAILED(hr)) {
         return nullptr;
     }
 
     // Allocate buffer
-    image->info.dataSize = image->info.width * image->info.height * 4;
+    image->info.dataSize = static_cast<size_t>(image->info.width) * image->info.height * 4;
+    if (image->info.dataSize > std::numeric_limits<UINT>::max()) {
+        return nullptr;
+    }
     image->data = std::make_unique<uint8_t[]>(image->info.dataSize);
 
+    const UINT stride = image->info.width * 4;
+    const UINT bufferSize = static_cast<UINT>(image->info.dataSize);
+
     // Copy pixels
-    hr = converter->CopyPixels(
-        nullptr,
-        image->info.width * 4,
-        image->info.dataSize,
-        image->data.get()
-    );
+    hr = converter->CopyPixels(nullptr, stride, bufferSize, image->data.get());
 
     if (FAILED(hr)) {
         return nullptr;
@@ -278,17 +229,14 @@ std::unique_ptr<DecodedImage> ImageDecoder::DecodeWithWIC(
     return image;
 }
 
-std::unique_ptr<DecodedImage> ImageDecoder::DecodeRAW(
-    const std::filesystem::path& filePath,
-    DecoderFlags flags)
+std::unique_ptr<DecodedImage> ImageDecoder::DecodeRAW(const std::filesystem::path& filePath, DecoderFlags flags)
 {
     // TODO: Implement RAW decoding with libraw
     return nullptr;
 }
 
-std::unique_ptr<DecodedImage> ImageDecoder::DecodeMemoryMapped(
-    const std::filesystem::path& filePath,
-    DecoderFlags flags)
+std::unique_ptr<DecodedImage> ImageDecoder::DecodeMemoryMapped(const std::filesystem::path& filePath,
+                                                               DecoderFlags flags)
 {
     // TODO: Implement memory-mapped file decoding
     // This requires:

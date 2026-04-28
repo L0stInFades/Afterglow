@@ -45,6 +45,8 @@ add_compile_options(
     /Zc:preprocessor
     /wd4100
     /wd4201
+    /wd4324
+    /wd4996
 )
 
 if(MSVC)
@@ -53,6 +55,15 @@ endif()
 
 # Windows macros
 add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+
+option(AFTERGLOW_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+if(AFTERGLOW_WARNINGS_AS_ERRORS)
+    if(MSVC)
+        add_compile_options(/WX)
+    else()
+        add_compile_options(-Werror)
+    endif()
+endif()
 
 # Source files
 set(SOURCES
