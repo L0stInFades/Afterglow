@@ -1165,7 +1165,8 @@ void ImagePipeline::SavePersistentThumbs(const std::filesystem::path& cachePath)
     // Write to .tmp file
     auto tmpPath = cachePath.wstring() + L".tmp";
 
-    FILE* f = _wfopen(tmpPath.c_str(), L"wb");
+    FILE* f = nullptr;
+    _wfopen_s(&f, tmpPath.c_str(), L"wb");
     if (!f) return;
 
     // Header

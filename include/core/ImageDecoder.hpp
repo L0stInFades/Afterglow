@@ -6,6 +6,9 @@
 #include <filesystem>
 #include <optional>
 #include <functional>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <wrl/client.h>
 #include <wincodec.h>
 
@@ -57,6 +60,9 @@ public:
     ImageDecoder();
     ~ImageDecoder();
 
+    ImageDecoder(const ImageDecoder&) = delete;
+    ImageDecoder& operator=(const ImageDecoder&) = delete;
+
     // Main decoding interface
     std::unique_ptr<DecodedImage> Decode(
         const std::filesystem::path& filePath,
@@ -84,6 +90,13 @@ public:
     static std::vector<std::wstring> GetSupportedExtensions();
 
 private:
+    struct AsyncDecodeState {
+        std::atomic<bool> shuttingDown{false};
+        std::mutex mutex;
+        std::condition_variable idle;
+        size_t activeTasks = 0;
+    };
+
     // WIC decoder implementation
     std::unique_ptr<DecodedImage> DecodeWithWIC(
         const std::filesystem::path& filePath,
@@ -103,6 +116,7 @@ private:
     );
 
     Microsoft::WRL::ComPtr<IWICImagingFactory2> wicFactory_;
+    std::shared_ptr<AsyncDecodeState> asyncState_;
 };
 
 } // namespace Core

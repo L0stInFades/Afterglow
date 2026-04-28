@@ -405,9 +405,6 @@ void ThumbnailStrip::RenderLoadingIndicator(ID2D1DeviceContext* context, size_t 
     float centerY = rect.top + rect.bottom / 2.0f;
     float radius = std::min(rect.right - rect.left, rect.bottom - rect.top) / 4.0f;
 
-    ULONGLONG time = GetTickCount64();
-    float angle = static_cast<float>(time % 1000) / 1000.0f * 360.0f;
-
     // Simple loading circle
     D2D1_ELLIPSE ellipse = D2D1::Ellipse(D2D1::Point2F(centerX, centerY), radius, radius);
 

@@ -44,13 +44,19 @@ bool GestureHandler::Initialize(HWND hwnd)
 
     // Configure Windows gesture support
     DWORD flags = GetGestureConfigFlags();
+    auto wantFlag = [flags](DWORD flag) -> DWORD {
+        return (flags & flag) ? flag : 0u;
+    };
+    auto blockFlag = [flags](DWORD flag) -> DWORD {
+        return (flags & flag) ? 0u : flag;
+    };
 
     GESTURECONFIG config[] = {
-        { GID_ZOOM, flags & GC_ZOOM ? 0 : GC_ZOOM, flags & GC_ZOOM ? GC_ZOOM : 0 },
-        { GID_PAN, flags & GC_PAN ? 0 : GC_PAN, flags & GC_PAN ? GC_PAN : 0 },
-        { GID_ROTATE, flags & GC_ROTATE ? 0 : GC_ROTATE, flags & GC_ROTATE ? GC_ROTATE : 0 },
-        { GID_TWOFINGERTAP, flags & GC_TWOFINGERTAP ? 0 : GC_TWOFINGERTAP, flags & GC_TWOFINGERTAP ? GC_TWOFINGERTAP : 0 },
-        { GID_PRESSANDTAP, flags & GC_PRESSANDTAP ? 0 : GC_PRESSANDTAP, flags & GC_PRESSANDTAP ? GC_PRESSANDTAP : 0 }
+        { GID_ZOOM, wantFlag(GC_ZOOM), blockFlag(GC_ZOOM) },
+        { GID_PAN, wantFlag(GC_PAN), blockFlag(GC_PAN) },
+        { GID_ROTATE, wantFlag(GC_ROTATE), blockFlag(GC_ROTATE) },
+        { GID_TWOFINGERTAP, wantFlag(GC_TWOFINGERTAP), blockFlag(GC_TWOFINGERTAP) },
+        { GID_PRESSANDTAP, wantFlag(GC_PRESSANDTAP), blockFlag(GC_PRESSANDTAP) }
     };
 
     BOOL result = SetGestureConfig(

@@ -14,7 +14,7 @@ void D2DLog(const char* msg) {
     OutputDebugStringA(msg);
     OutputDebugStringA("\n");
     static FILE* f = nullptr;
-    if (!f) f = fopen("debug_log.txt", "a");
+    if (!f) fopen_s(&f, "debug_log.txt", "a");
     if (f) { fprintf(f, "  [D2D] %s\n", msg); fflush(f); }
 }
 void D2DLogHR(const char* msg, HRESULT hr) {
