@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <string>
 #include <windows.h>
+#include <objbase.h>
 
 namespace UltraImageViewer {
 namespace Core {
@@ -143,6 +144,9 @@ std::optional<ThreadPool::DequeuedTask> ThreadPool::TryDequeue()
 
 void ThreadPool::WorkerFunc(uint32_t /*index*/)
 {
+    HRESULT comHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool comInitialized = SUCCEEDED(comHr);
+
     // Map lane index to Windows thread priority for "unfair scheduling":
     //   High (0)   → THREAD_PRIORITY_ABOVE_NORMAL  (visible thumbnails)
     //   Normal (1) → THREAD_PRIORITY_NORMAL         (default)
@@ -211,6 +215,10 @@ void ThreadPool::WorkerFunc(uint32_t /*index*/)
         continue;
 
     next_cycle:;
+    }
+
+    if (comInitialized) {
+        CoUninitialize();
     }
 }
 

@@ -29,6 +29,7 @@ public:
 
     void Render(Rendering::Direct2DRenderer* renderer, bool overlayMode = false);
     void Update(float deltaTime);
+    void ReleaseDeviceResources();
 
     // Whether dismiss gesture is active (for ViewManager to render gallery behind)
     bool IsDismissActive() const;

@@ -65,6 +65,19 @@ void ImageViewer::EnsureResources(Rendering::Direct2DRenderer* renderer)
     resourcesCreated_ = true;
 }
 
+void ImageViewer::ReleaseDeviceResources()
+{
+    currentBitmap_.Reset();
+    prevBitmap_.Reset();
+    nextBitmap_.Reset();
+    bgBrush_.Reset();
+    overlayTextBrush_.Reset();
+    overlayBgBrush_.Reset();
+    counterFormat_.Reset();
+    filenameFormat_.Reset();
+    resourcesCreated_ = false;
+}
+
 void ImageViewer::SetImages(const std::vector<std::filesystem::path>& paths, size_t startIndex)
 {
     images_ = paths;
@@ -104,13 +117,19 @@ void ImageViewer::LoadCurrentPage()
 
     // Prefetch full-res neighbors
     if (currentIndex_ > 0) {
-        pipeline_->GetBitmapAsync(images_[currentIndex_ - 1], [this](auto bmp) {
-            prevBitmap_ = bmp;
+        auto expectedPath = images_[currentIndex_ - 1];
+        pipeline_->GetBitmapAsync(expectedPath, [this, expectedPath](auto bmp) {
+            if (currentIndex_ > 0 && images_[currentIndex_ - 1] == expectedPath) {
+                prevBitmap_ = bmp;
+            }
         });
     }
     if (currentIndex_ + 1 < images_.size()) {
-        pipeline_->GetBitmapAsync(images_[currentIndex_ + 1], [this](auto bmp) {
-            nextBitmap_ = bmp;
+        auto expectedPath = images_[currentIndex_ + 1];
+        pipeline_->GetBitmapAsync(expectedPath, [this, expectedPath](auto bmp) {
+            if (currentIndex_ + 1 < images_.size() && images_[currentIndex_ + 1] == expectedPath) {
+                nextBitmap_ = bmp;
+            }
         });
     }
 }
@@ -165,6 +184,10 @@ void ImageViewer::Render(Rendering::Direct2DRenderer* renderer, bool overlayMode
 
     auto* ctx = renderer->GetContext();
     if (!ctx) return;
+
+    if (!currentBitmap_ && !images_.empty()) {
+        LoadCurrentPage();
+    }
 
     float dismissY = dismissSpring_.GetValue();
     float dismissScale = 1.0f - std::abs(dismissY) / (viewHeight_ * 2.0f);

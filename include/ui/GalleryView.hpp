@@ -50,6 +50,7 @@ public:
 
     void Render(Rendering::Direct2DRenderer* renderer);
     void Update(float deltaTime);
+    void ReleaseDeviceResources();
 
     // Interaction
     void OnMouseWheel(float delta);

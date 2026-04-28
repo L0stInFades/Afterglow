@@ -253,6 +253,10 @@ void Direct2DRenderer::HandleDeviceLost()
     D2DLog("HandleDeviceLost: releasing all resources");
     deviceLost_ = true;
 
+    if (deviceLostCallback_) {
+        deviceLostCallback_();
+    }
+
     // Release everything in reverse order
     Shutdown();
 

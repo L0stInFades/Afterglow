@@ -154,5 +154,12 @@ void TransitionController::Update(float deltaTime)
     }
 }
 
+void TransitionController::ReleaseDeviceResources()
+{
+    transitionBitmap_.Reset();
+    onComplete_ = nullptr;
+    active_ = false;
+}
+
 } // namespace UI
 } // namespace UltraImageViewer

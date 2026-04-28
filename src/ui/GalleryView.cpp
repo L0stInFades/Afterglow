@@ -452,6 +452,50 @@ void GalleryView::EnsureResources(Rendering::Direct2DRenderer* renderer)
     resourcesCreated_ = true;
 }
 
+void GalleryView::ReleaseDeviceResources()
+{
+    bgBrush_.Reset();
+    cellBrush_.Reset();
+    textBrush_.Reset();
+    secondaryBrush_.Reset();
+    accentBrush_.Reset();
+    titleFormat_.Reset();
+    sectionFormat_.Reset();
+    countFormat_.Reset();
+    countRightFormat_.Reset();
+    hoverBrush_.Reset();
+    scrollIndicatorBrush_.Reset();
+    tabFormat_.Reset();
+    albumTitleFormat_.Reset();
+    albumCountFormat_.Reset();
+    backButtonFormat_.Reset();
+    editButtonFormat_.Reset();
+
+    glassBlurEffect_.Reset();
+    glassDisplaceEffect_.Reset();
+    offscreenBitmap_.Reset();
+    displacementMap_.Reset();
+    glassTintBrush_.Reset();
+    glassBorderBrush_.Reset();
+    glassHighlightBrush_.Reset();
+    glassActivePillBrush_.Reset();
+    glassActivePillBorderBrush_.Reset();
+    glassTabTextBrush_.Reset();
+    glassTabTextInactiveBrush_.Reset();
+    dwFactory_.Reset();
+
+    editBadgeBrush_.Reset();
+    editBadgeIconBrush_.Reset();
+    addCardBorderBrush_.Reset();
+    addCardIconBrush_.Reset();
+
+    offscreenW_ = 0;
+    offscreenH_ = 0;
+    displacementMapW_ = 0.0f;
+    displacementMapH_ = 0.0f;
+    resourcesCreated_ = false;
+}
+
 GalleryView::GridLayout GalleryView::CalculateGridLayout(float viewWidth) const
 {
     GridLayout grid = {};

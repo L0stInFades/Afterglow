@@ -5,7 +5,7 @@
   "description": "Ultra-advanced Windows image viewer with hardware acceleration",
   "dependencies": [
     {
-      "name": "directx-tex",
+      "name": "directxtex",
       "platform": "windows"
     },
     {

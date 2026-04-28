@@ -58,6 +58,13 @@ public:
     // Returns the number of bitmaps created this frame.
     int FlushReadyThumbnails(int maxCount);
 
+    // Called by the UI/render thread. Creates D2D bitmaps for full-size images
+    // decoded by worker threads and runs their callbacks on the UI thread.
+    int FlushReadyBitmaps(int maxCount);
+
+    // Drop all D2D device-dependent resources after device loss.
+    void ReleaseDeviceResources();
+
     // Cancel pending non-visible requests and increment generation counter.
     // Call on fast scroll to avoid wasting decode work on off-screen images.
     void InvalidateRequests();
@@ -176,12 +183,25 @@ private:
     std::deque<ReadyThumbnail> readyQueue_;
     mutable std::mutex readyMutex_;
 
+    struct ReadyBitmap {
+        std::filesystem::path path;
+        std::unique_ptr<uint8_t[]> pixels;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        BitmapCallback callback;
+    };
+    std::deque<ReadyBitmap> readyBitmapQueue_;
+    mutable std::mutex readyBitmapMutex_;
+
     // Generation counter: incremented on InvalidateRequests()
     std::atomic<uint64_t> generation_{0};
 
     // Track which paths have pending requests to avoid duplicate queuing
     // Protected by cacheMutex_
     std::unordered_map<std::filesystem::path, uint64_t> pendingRequests_;
+
+    // Full-size async requests. Protected by cacheMutex_.
+    std::unordered_map<std::filesystem::path, bool> pendingFullRequests_;
 
     // Currently visible paths (for prioritization). Protected by cacheMutex_
     std::unordered_map<std::filesystem::path, bool> visiblePaths_;
