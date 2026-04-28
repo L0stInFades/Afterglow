@@ -89,9 +89,29 @@ void ImageDecoder::DecodeAsync(
     std::function<void(std::unique_ptr<DecodedImage>)> callback,
     DecoderFlags flags)
 {
-    // Launch async decoding in background thread
-    std::thread([this, filePath, callback, flags]() {
-        auto image = this->Decode(filePath, flags);
+    if (!callback) {
+        return;
+    }
+
+    // Keep async decode independent from this object's lifetime.
+    std::thread([filePath, callback = std::move(callback), flags]() mutable {
+        std::unique_ptr<DecodedImage> image;
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        bool shouldUninitializeCom = SUCCEEDED(hr);
+
+        if (SUCCEEDED(hr)) {
+            try {
+                ImageDecoder decoder;
+                image = decoder.Decode(filePath, flags);
+            } catch (...) {
+                image.reset();
+            }
+        }
+
+        if (shouldUninitializeCom) {
+            CoUninitialize();
+        }
+
         callback(std::move(image));
     }).detach();
 }
