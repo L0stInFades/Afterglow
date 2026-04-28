@@ -55,6 +55,11 @@ void ImagePipeline::Shutdown()
     fullImageCache_.clear();
     fullImageCacheBytes_ = 0;
     pendingRequests_.clear();
+    pendingFullRequests_.clear();
+    {
+        std::lock_guard readyLock(readyBitmapMutex_);
+        readyBitmapQueue_.clear();
+    }
 }
 
 Microsoft::WRL::ComPtr<ID2D1Bitmap> ImagePipeline::GetBitmap(const std::filesystem::path& path)
@@ -82,6 +87,8 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap> ImagePipeline::GetBitmap(const std::filesyst
 
 void ImagePipeline::GetBitmapAsync(const std::filesystem::path& path, BitmapCallback callback)
 {
+    if (!threadPool_) return;
+
     // Check cache first
     {
         std::lock_guard lock(cacheMutex_);
@@ -90,24 +97,92 @@ void ImagePipeline::GetBitmapAsync(const std::filesystem::path& path, BitmapCall
             if (callback) callback(it->second);
             return;
         }
+
+        if (pendingFullRequests_.contains(path)) {
+            return;
+        }
+        pendingFullRequests_[path] = true;
     }
 
-    if (!threadPool_) return;
-
     auto pathCopy = path;
-    threadPool_->Submit([this, pathCopy, cb = std::move(callback)] {
-        auto bitmap = DecodeAndCreateBitmap(pathCopy);
-        if (bitmap) {
-            auto sz = bitmap->GetPixelSize();
-            size_t bytes = static_cast<size_t>(sz.width) * sz.height * 4;
+    threadPool_->Submit([this, pathCopy, cb = std::move(callback)]() mutable {
+        ReadyBitmap ready;
+        ready.path = pathCopy;
+        ready.callback = std::move(cb);
 
-            std::lock_guard lock(cacheMutex_);
-            fullImageCache_[pathCopy] = bitmap;
-            fullImageCacheBytes_ += bytes;
-            EvictFullImagesIfNeeded();
+        if (!shutdownRequested_.load(std::memory_order_acquire) && decoder_) {
+            auto image = decoder_->Decode(pathCopy, DecoderFlags::ZeroCopy);
+            if (image && image->data) {
+                ready.width = image->info.width;
+                ready.height = image->info.height;
+                ready.pixels = std::move(image->data);
+            }
         }
-        if (cb) cb(bitmap);
+
+        {
+            std::lock_guard lock(readyBitmapMutex_);
+            readyBitmapQueue_.push_back(std::move(ready));
+        }
     }, TaskPriority::Normal);
+}
+
+int ImagePipeline::FlushReadyBitmaps(int maxCount)
+{
+    std::vector<ReadyBitmap> batch;
+    {
+        std::lock_guard lock(readyBitmapMutex_);
+        int count = std::min(maxCount, static_cast<int>(readyBitmapQueue_.size()));
+        if (count == 0) return 0;
+
+        batch.reserve(count);
+        for (int i = 0; i < count; ++i) {
+            batch.push_back(std::move(readyBitmapQueue_.front()));
+            readyBitmapQueue_.pop_front();
+        }
+    }
+
+    int completed = 0;
+    for (auto& ready : batch) {
+        Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;
+
+        if (ready.pixels && renderer_ && ready.width > 0 && ready.height > 0) {
+            bitmap = renderer_->CreateBitmap(ready.width, ready.height, ready.pixels.get());
+        }
+
+        {
+            std::lock_guard lock(cacheMutex_);
+            pendingFullRequests_.erase(ready.path);
+
+            auto existing = fullImageCache_.find(ready.path);
+            if (existing != fullImageCache_.end()) {
+                bitmap = existing->second;
+            } else if (bitmap) {
+                fullImageCache_[ready.path] = bitmap;
+                fullImageCacheBytes_ += static_cast<size_t>(ready.width) * ready.height * 4;
+                EvictFullImagesIfNeeded();
+            }
+        }
+
+        if (ready.callback) {
+            ready.callback(bitmap);
+        }
+        ++completed;
+    }
+
+    return completed;
+}
+
+void ImagePipeline::ReleaseDeviceResources()
+{
+    {
+        std::lock_guard lock(cacheMutex_);
+        thumbnailCache_.clear();
+        thumbnailCacheBytes_ = 0;
+        fullImageCache_.clear();
+        fullImageCacheBytes_ = 0;
+    }
+
+    // Decoded CPU buffers are still valid and can be uploaded after recovery.
 }
 
 Microsoft::WRL::ComPtr<ID2D1Bitmap> ImagePipeline::GetThumbnail(const std::filesystem::path& path,
@@ -417,18 +492,20 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap> ImagePipeline::GetCachedThumbnail(
     // Fall through to persistent disk cache (even during fast scroll)
     if (persistSyncBudget_ > 0 && renderer_) {
         uint16_t w = 0, h = 0;
-        const uint8_t* pixelPtr = nullptr;
+        std::unique_ptr<uint8_t[]> pixels;
         {
             std::shared_lock plock(persistMutex_);
             auto it = persistIndex_.find(path);
             if (it != persistIndex_.end()) {
                 w = it->second.width;
                 h = it->second.height;
-                pixelPtr = it->second.pixelData;
+                uint32_t pixelSize = static_cast<uint32_t>(w) * h * 4;
+                pixels = std::make_unique<uint8_t[]>(pixelSize);
+                memcpy(pixels.get(), it->second.pixelData, pixelSize);
             }
         }
-        if (pixelPtr && w > 0 && h > 0) {
-            auto bitmap = renderer_->CreateBitmap(w, h, pixelPtr);
+        if (pixels && w > 0 && h > 0) {
+            auto bitmap = renderer_->CreateBitmap(w, h, pixels.get());
             if (bitmap) {
                 --persistSyncBudget_;
                 std::lock_guard lock(cacheMutex_);
@@ -511,7 +588,7 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap> ImagePipeline::RequestThumbnail(
     // on the render thread. Zero-frame latency — identical to iOS behavior.
     if (persistSyncBudget_ > 0 && renderer_) {
         uint16_t w = 0, h = 0;
-        const uint8_t* pixelPtr = nullptr;
+        std::unique_ptr<uint8_t[]> pixels;
 
         {
             std::shared_lock plock(persistMutex_);
@@ -519,12 +596,14 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap> ImagePipeline::RequestThumbnail(
             if (it != persistIndex_.end()) {
                 w = it->second.width;
                 h = it->second.height;
-                pixelPtr = it->second.pixelData;
+                uint32_t pixelSize = static_cast<uint32_t>(w) * h * 4;
+                pixels = std::make_unique<uint8_t[]>(pixelSize);
+                memcpy(pixels.get(), it->second.pixelData, pixelSize);
             }
         }
 
-        if (pixelPtr && w > 0 && h > 0) {
-            auto bitmap = renderer_->CreateBitmap(w, h, pixelPtr);
+        if (pixels && w > 0 && h > 0) {
+            auto bitmap = renderer_->CreateBitmap(w, h, pixels.get());
             if (bitmap) {
                 --persistSyncBudget_;
                 std::lock_guard lock(cacheMutex_);
@@ -589,7 +668,11 @@ int ImagePipeline::FlushReadyThumbnails(int maxCount)
 
     int created = 0;
     for (auto& ready : batch) {
-        if (!renderer_ || !ready.pixels || ready.width == 0 || ready.height == 0) continue;
+        if (!renderer_ || !ready.pixels || ready.width == 0 || ready.height == 0) {
+            std::lock_guard lock(cacheMutex_);
+            pendingRequests_.erase(ready.path);
+            continue;
+        }
 
         // Create D2D bitmap (copies pixels to GPU internally)
         auto bitmap = renderer_->CreateBitmap(ready.width, ready.height, ready.pixels.get());
@@ -615,7 +698,11 @@ int ImagePipeline::FlushReadyThumbnails(int maxCount)
             entry.lastAccess = std::chrono::steady_clock::now();
             thumbnailCacheBytes_ += static_cast<size_t>(ready.width) * ready.height * 4;
             thumbnailCache_[ready.path] = std::move(entry);
+            pendingRequests_.erase(ready.path);
             ++created;
+        } else {
+            std::lock_guard lock(cacheMutex_);
+            pendingRequests_.erase(ready.path);
         }
     }
 

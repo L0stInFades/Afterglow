@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 #include <filesystem>
+#include <functional>
 
 namespace UltraImageViewer {
 namespace Rendering {
@@ -73,6 +74,7 @@ public:
     void Resize(uint32_t width, uint32_t height);
     bool IsDeviceLost() const { return deviceLost_; }
     void HandleDeviceLost();
+    void SetDeviceLostCallback(std::function<void()> callback) { deviceLostCallback_ = std::move(callback); }
     ID2D1DeviceContext* GetContext() const { return context_.Get(); }
     ID2D1Factory3* GetFactory() const { return factory_.Get(); }
 
@@ -118,6 +120,7 @@ private:
 
     // Device lost recovery
     bool deviceLost_ = false;
+    std::function<void()> deviceLostCallback_;
 };
 
 /**

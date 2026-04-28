@@ -116,6 +116,10 @@ void Application::Shutdown()
         scanThread_.join();
     }
 
+    if (renderer_) {
+        renderer_->SetDeviceLostCallback({});
+    }
+
     // Shutdown order matters
     if (pipeline_) pipeline_->Shutdown();
     viewManager_.reset();
@@ -217,6 +221,10 @@ int Application::Run(int nCmdShow)
 
         // Check scan progress and push results to gallery
         CheckScanProgress();
+
+        if (pipeline_ && pipeline_->FlushReadyBitmaps(2) > 0) {
+            needsRender_ = true;
+        }
 
         // Render only when needed
         bool hasAnimations = animEngine_ && animEngine_->HasActiveAnimations();
@@ -531,6 +539,16 @@ bool Application::InitializeComponents()
     });
     viewManager_->GetGalleryView()->SetFolderVisitCallback([this](const auto& folder) {
         RecordFolderVisit(folder);
+    });
+
+    renderer_->SetDeviceLostCallback([this]() {
+        if (viewManager_) {
+            viewManager_->ReleaseDeviceResources();
+        }
+        if (pipeline_) {
+            pipeline_->ReleaseDeviceResources();
+        }
+        needsRender_ = true;
     });
 
     LoadRecents();

@@ -32,6 +32,7 @@ public:
 
     void Render(Rendering::Direct2DRenderer* renderer);
     void Update(float deltaTime);
+    void ReleaseDeviceResources();
 
     // View transitions
     void TransitionToViewer(size_t imageIndex, D2D1_RECT_F fromRect);

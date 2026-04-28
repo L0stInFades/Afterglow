@@ -106,6 +106,17 @@ void ViewManager::Update(float deltaTime)
     }
 }
 
+void ViewManager::ReleaseDeviceResources()
+{
+    galleryView_.ReleaseDeviceResources();
+    imageViewer_.ReleaseDeviceResources();
+    transition_.ReleaseDeviceResources();
+    if (state_ == ViewState::Transition) {
+        state_ = pendingState_;
+    }
+    needsRender_ = true;
+}
+
 void ViewManager::TransitionToViewer(size_t imageIndex, D2D1_RECT_F fromRect)
 {
     if (state_ != ViewState::Gallery) return;

@@ -47,6 +47,10 @@ add_compile_options(
     /wd4201
 )
 
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 # Windows macros
 add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 

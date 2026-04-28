@@ -37,6 +37,7 @@ public:
     bool IsActive() const { return active_; }
     void Render(Rendering::Direct2DRenderer* renderer);
     void Update(float deltaTime);
+    void ReleaseDeviceResources();
 
 private:
     Animation::SpringAnimation rectX_;
