@@ -166,7 +166,27 @@ Install Windows 11 SDK from Visual Studio Installer or separately.
 
 ## Continuous Integration
 
-See `.github/workflows/build.yml` for GitHub Actions configuration.
+See `.github/workflows/build.yml` for GitHub Actions configuration. Pull requests to `master`
+run the style checks and the Windows Release build.
+
+## Code Quality
+
+The repository uses `clang-format` for C++ formatting and `pre-commit` for local
+hooks. Install the hooks once per clone:
+
+```batch
+python -m pip install pre-commit
+pre-commit install
+```
+
+Run the same checks locally:
+
+```batch
+pre-commit run --all-files
+```
+
+CI also builds with `-DAFTERGLOW_WARNINGS_AS_ERRORS=ON`, so pull requests must
+compile without MSVC warnings.
 
 ## Signing
 

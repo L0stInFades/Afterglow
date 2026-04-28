@@ -29,8 +29,7 @@ ThumbnailStrip::ThumbnailStrip()
     , loadingIndicatorColor_{0.5f, 0.5f, 0.5f, 1.0f}
     , animationSpeed_(ANIMATION_SPEED)
     , lastAnimationTime_(0)
-{
-}
+{}
 
 ThumbnailStrip::~ThumbnailStrip()
 {
@@ -258,10 +257,9 @@ D2D1_RECT_F ThumbnailStrip::GetThumbnailRect(size_t index) const
     float y = y_ + (height_ - thumbnailSize_) / 2.0f;
 
     // Calculate aspect ratio fit
-    float aspect = 1.0f;  // Default to square
+    float aspect = 1.0f; // Default to square
     if (index < thumbnails_.size() && thumbnails_[index].width > 0) {
-        aspect = static_cast<float>(thumbnails_[index].width) /
-                 static_cast<float>(thumbnails_[index].height);
+        aspect = static_cast<float>(thumbnails_[index].width) / static_cast<float>(thumbnails_[index].height);
     }
 
     float renderWidth, renderHeight;
@@ -347,21 +345,9 @@ void ThumbnailStrip::RenderThumbnails(ID2D1DeviceContext* context)
 
         if (thumb.bitmap) {
             // Render thumbnail
-            D2D1_RECT_F srcRect = {
-                0.0f,
-                0.0f,
-                static_cast<float>(thumb.width),
-                static_cast<float>(thumb.height)
-            };
+            D2D1_RECT_F srcRect = {0.0f, 0.0f, static_cast<float>(thumb.width), static_cast<float>(thumb.height)};
 
-            context->DrawBitmap(
-                thumb.bitmap.Get(),
-                rect,
-                1.0f,
-                D2D1_INTERPOLATION_MODE_LINEAR,
-                srcRect,
-                nullptr
-            );
+            context->DrawBitmap(thumb.bitmap.Get(), rect, 1.0f, D2D1_INTERPOLATION_MODE_LINEAR, srcRect, nullptr);
         } else if (thumb.isLoading) {
             // Render loading indicator
             RenderLoadingIndicator(context, i);
@@ -382,18 +368,12 @@ void ThumbnailStrip::RenderSelection(ID2D1DeviceContext* context, size_t index)
 
     // Expand rect for border
     float borderThickness = 3.0f;
-    D2D1_RECT_F borderRect = D2D1::RectF(
-        rect.left - borderThickness,
-        rect.top - borderThickness,
-        rect.right + borderThickness,
-        rect.bottom + borderThickness
-    );
+    D2D1_RECT_F borderRect = D2D1::RectF(rect.left - borderThickness,
+                                         rect.top - borderThickness,
+                                         rect.right + borderThickness,
+                                         rect.bottom + borderThickness);
 
-    context->DrawRectangle(
-        borderRect,
-        selectedBorderBrush_.Get(),
-        borderThickness
-    );
+    context->DrawRectangle(borderRect, selectedBorderBrush_.Get(), borderThickness);
 }
 
 void ThumbnailStrip::RenderLoadingIndicator(ID2D1DeviceContext* context, size_t index)
@@ -404,9 +384,6 @@ void ThumbnailStrip::RenderLoadingIndicator(ID2D1DeviceContext* context, size_t 
     float centerX = rect.left + rect.right / 2.0f;
     float centerY = rect.top + rect.bottom / 2.0f;
     float radius = std::min(rect.right - rect.left, rect.bottom - rect.top) / 4.0f;
-
-    ULONGLONG time = GetTickCount64();
-    float angle = static_cast<float>(time % 1000) / 1000.0f * 360.0f;
 
     // Simple loading circle
     D2D1_ELLIPSE ellipse = D2D1::Ellipse(D2D1::Point2F(centerX, centerY), radius, radius);

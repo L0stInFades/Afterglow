@@ -45,21 +45,18 @@ bool GestureHandler::Initialize(HWND hwnd)
     // Configure Windows gesture support
     DWORD flags = GetGestureConfigFlags();
 
-    GESTURECONFIG config[] = {
-        { GID_ZOOM, flags & GC_ZOOM ? 0 : GC_ZOOM, flags & GC_ZOOM ? GC_ZOOM : 0 },
-        { GID_PAN, flags & GC_PAN ? 0 : GC_PAN, flags & GC_PAN ? GC_PAN : 0 },
-        { GID_ROTATE, flags & GC_ROTATE ? 0 : GC_ROTATE, flags & GC_ROTATE ? GC_ROTATE : 0 },
-        { GID_TWOFINGERTAP, flags & GC_TWOFINGERTAP ? 0 : GC_TWOFINGERTAP, flags & GC_TWOFINGERTAP ? GC_TWOFINGERTAP : 0 },
-        { GID_PRESSANDTAP, flags & GC_PRESSANDTAP ? 0 : GC_PRESSANDTAP, flags & GC_PRESSANDTAP ? GC_PRESSANDTAP : 0 }
+    auto makeConfig = [flags](DWORD id, DWORD configFlag) -> GESTURECONFIG {
+        const bool enabled = (flags & configFlag) != 0;
+        return GESTURECONFIG{id, enabled ? DWORD{0} : configFlag, enabled ? configFlag : DWORD{0}};
     };
 
-    BOOL result = SetGestureConfig(
-        hwnd,
-        0,
-        sizeof(config) / sizeof(config[0]),
-        config,
-        sizeof(GESTURECONFIG)
-    );
+    GESTURECONFIG config[] = {makeConfig(static_cast<DWORD>(GID_ZOOM), static_cast<DWORD>(GC_ZOOM)),
+                              makeConfig(static_cast<DWORD>(GID_PAN), static_cast<DWORD>(GC_PAN)),
+                              makeConfig(static_cast<DWORD>(GID_ROTATE), static_cast<DWORD>(GC_ROTATE)),
+                              makeConfig(static_cast<DWORD>(GID_TWOFINGERTAP), static_cast<DWORD>(GC_TWOFINGERTAP)),
+                              makeConfig(static_cast<DWORD>(GID_PRESSANDTAP), static_cast<DWORD>(GC_PRESSANDTAP))};
+
+    BOOL result = SetGestureConfig(hwnd, 0, sizeof(config) / sizeof(config[0]), config, sizeof(GESTURECONFIG));
 
     isInitialized_ = (result != FALSE);
 

@@ -1,0 +1,22 @@
+default_language_version:
+  python: python3
+
+files: ^((src|include)/.*\.(c|cc|cpp|cxx|h|hh|hpp|hxx)|CMakeLists\.txt|vcpkg\.json|\.github/workflows/.*\.ya?ml|docs/.*\.md|\.pre-commit-config\.ya?ml|\.clang-(format|tidy)|\.editorconfig|\.gitattributes)$
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+        files: ^(\.github/workflows/.*\.ya?ml|\.pre-commit-config\.ya?ml|\.clang-(format|tidy))$
+      - id: check-json
+        files: ^vcpkg\.json$
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.8
+    hooks:
+      - id: clang-format
+        files: ^(src|include)/.*\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$
