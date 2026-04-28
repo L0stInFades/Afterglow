@@ -45,6 +45,7 @@ add_compile_options(
     /Zc:preprocessor
     /wd4100
     /wd4201
+    /wd4324
 )
 
 if(MSVC)

@@ -26,7 +26,7 @@ namespace {
 void DebugLog(const char* msg) {
     static FILE* f = nullptr;
     if (!f) {
-        f = fopen("debug_log.txt", "w");
+        fopen_s(&f, "debug_log.txt", "w");
     }
     if (f) {
         fprintf(f, "%s\n", msg);
@@ -1343,7 +1343,8 @@ void Application::SaveScanCache(const std::vector<ScannedImage>& results)
         // [24..31] reserved, already zero
 
         // Write entire buffer in one call
-        FILE* f = _wfopen(filePath.c_str(), L"wb");
+        FILE* f = nullptr;
+        _wfopen_s(&f, filePath.c_str(), L"wb");
         if (!f) return;
 
         fwrite(header, 1, kHeaderSize, f);
@@ -1365,7 +1366,8 @@ std::vector<ScannedImage> Application::LoadScanCache()
     if (filePath.empty()) return results;
 
     try {
-        FILE* f = _wfopen(filePath.c_str(), L"rb");
+        FILE* f = nullptr;
+        _wfopen_s(&f, filePath.c_str(), L"rb");
         if (!f) return results;
 
         // Get file size
@@ -1456,7 +1458,8 @@ void Application::LoadFolderProfiles()
     auto path = GetFolderProfilePath();
     if (path.empty()) return;
 
-    FILE* f = _wfopen(path.c_str(), L"rb");
+    FILE* f = nullptr;
+    _wfopen_s(&f, path.c_str(), L"rb");
     if (!f) return;
 
     // Header: "FPROF" + version(4) + count(4)
@@ -1497,7 +1500,8 @@ void Application::SaveFolderProfiles()
     std::lock_guard lock(scanMutex_);
 
     std::filesystem::create_directories(path.parent_path());
-    FILE* f = _wfopen(path.c_str(), L"wb");
+    FILE* f = nullptr;
+    _wfopen_s(&f, path.c_str(), L"wb");
     if (!f) return;
 
     fwrite("FPROF", 1, 5, f);
