@@ -8,6 +8,8 @@
 #include <thread>
 
 namespace {
+thread_local const void* g_currentAsyncDecoderState = nullptr;
+
 bool CalculateBgraLayout(uint32_t width, uint32_t height, size_t& dataSize, UINT& stride, UINT& bufferSize)
 {
     if (width == 0 || height == 0) {
@@ -46,6 +48,7 @@ namespace UltraImageViewer {
 namespace Core {
 
 ImageDecoder::ImageDecoder()
+    : asyncState_(std::make_shared<AsyncDecodeState>())
 {
     // Initialize WIC factory
     HRESULT hr = CoCreateInstance(
@@ -60,7 +63,24 @@ ImageDecoder::ImageDecoder()
     }
 }
 
-ImageDecoder::~ImageDecoder() = default;
+ImageDecoder::~ImageDecoder()
+{
+    auto state = asyncState_;
+    if (!state) {
+        return;
+    }
+
+    std::unique_lock lock(state->mutex);
+    state->shuttingDown.store(true, std::memory_order_release);
+
+    if (g_currentAsyncDecoderState == state.get()) {
+        return;
+    }
+
+    state->idle.wait(lock, [state]() {
+        return state->activeTasks == 0;
+    });
+}
 
 std::unique_ptr<DecodedImage> ImageDecoder::Decode(
     const std::filesystem::path& filePath,
@@ -93,27 +113,76 @@ void ImageDecoder::DecodeAsync(
         return;
     }
 
-    // Keep async decode independent from this object's lifetime.
-    std::thread([filePath, callback = std::move(callback), flags]() mutable {
-        std::unique_ptr<DecodedImage> image;
-        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        bool shouldUninitializeCom = SUCCEEDED(hr);
+    auto state = asyncState_;
+    if (!state) {
+        return;
+    }
 
-        if (SUCCEEDED(hr)) {
+    {
+        std::lock_guard lock(state->mutex);
+        if (state->shuttingDown.load(std::memory_order_acquire)) {
+            return;
+        }
+        ++state->activeTasks;
+    }
+
+    try {
+        // Keep async decode independent from this object's lifetime.
+        std::thread([state, filePath, callback = std::move(callback), flags]() mutable {
+            g_currentAsyncDecoderState = state.get();
+            std::unique_ptr<DecodedImage> image;
+
             try {
-                ImageDecoder decoder;
-                image = decoder.Decode(filePath, flags);
+                HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+                bool shouldUninitializeCom = SUCCEEDED(hr);
+
+                if (SUCCEEDED(hr) && !state->shuttingDown.load(std::memory_order_acquire)) {
+                    try {
+                        ImageDecoder decoder;
+                        image = decoder.Decode(filePath, flags);
+                    } catch (...) {
+                        image.reset();
+                    }
+                }
+
+                if (shouldUninitializeCom) {
+                    CoUninitialize();
+                }
+
+                if (!state->shuttingDown.load(std::memory_order_acquire)) {
+                    try {
+                        callback(std::move(image));
+                    } catch (...) {
+                    }
+                }
             } catch (...) {
-                image.reset();
+            }
+
+            {
+                std::lock_guard lock(state->mutex);
+                if (state->activeTasks > 0) {
+                    --state->activeTasks;
+                }
+            }
+            state->idle.notify_all();
+            g_currentAsyncDecoderState = nullptr;
+        }).detach();
+    } catch (...) {
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->activeTasks > 0) {
+                --state->activeTasks;
             }
         }
+        state->idle.notify_all();
 
-        if (shouldUninitializeCom) {
-            CoUninitialize();
+        if (!state->shuttingDown.load(std::memory_order_acquire)) {
+            try {
+                callback(nullptr);
+            } catch (...) {
+            }
         }
-
-        callback(std::move(image));
-    }).detach();
+    }
 }
 
 std::optional<ImageInfo> ImageDecoder::GetImageInfo(const std::filesystem::path& filePath)
